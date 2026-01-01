@@ -1,0 +1,155 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+st.set_page_config(page_title="İMO Van 2026", layout="wide", page_icon="🏗️")
+
+# --- BAĞLANTI AYARLARI ---
+@st.cache_resource
+def get_connection():
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    return client
+
+def get_data():
+    client = get_connection()
+    try:
+        sheet = client.open("Van_IMO_Secim_2026")
+        ws = sheet.worksheet("secmenler")
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
+        return df, ws
+    except Exception as e:
+        st.error(f"Excel Bağlantı Hatası: {e}")
+        return pd.DataFrame(), None
+
+# --- GİRİŞ EKRANI ---
+if 'user' not in st.session_state:
+    st.session_state.user = None
+
+if st.session_state.user is None:
+    st.title("🏗️ İMO VAN 2026 - SEÇİM SİSTEMİ")
+    with st.form("giris"):
+        kadi = st.text_input("Kullanıcı Adı")
+        sifre = st.text_input("Şifre", type="password")
+        btn = st.form_submit_button("Giriş Yap")
+        if btn:
+            try:
+                client = get_connection()
+                sheet = client.open("Van_IMO_Secim_2026")
+                ws_users = sheet.worksheet("kullanicilar")
+                users = ws_users.get_all_records()
+                df_users = pd.DataFrame(users)
+                
+                login_user = df_users[df_users['Kullanici_Adi'] == kadi]
+                if not login_user.empty and str(login_user.iloc[0]['Sifre']) == sifre:
+                    st.session_state.user = login_user.iloc[0].to_dict()
+                    st.rerun()
+                else:
+                    st.error("Hatalı Kullanıcı Adı veya Şifre!")
+            except Exception as e:
+                st.error(f"Giriş Hatası: {e}")
+    st.stop()
+
+# --- ANA PROGRAM ---
+user = st.session_state.user
+st.sidebar.info(f"👤 {user['Kullanici_Adi']} | Yetki: {user['Rol']}")
+
+if st.sidebar.button("Çıkış"):
+    st.session_state.user = None
+    st.rerun()
+
+df, ws = get_data()
+if df.empty:
+    st.warning("Veri yok veya bağlantı hatası.")
+    st.stop()
+
+# Yetki Bazlı Filtreleme
+if user['Rol'] == 'SAHA':
+    df = df[df['Temsilcilik'] == user['Bolge_Yetkisi']]
+
+menu = st.sidebar.radio("Menü", ["📊 Analiz Paneli", "📝 Veri Girişi"])
+
+# --- 1. ANALİZ PANELİ ---
+if menu == "📊 Analiz Paneli":
+    st.title("📊 Seçim Durum Analizi")
+    
+    col1, col2, col3 = st.columns(3)
+    toplam = len(df)
+    ulasilan = len(df[df['Egilim'].astype(str) != ""])
+    
+    col1.metric("Toplam Seçmen", toplam)
+    col2.metric("Ulaşılan", ulasilan, f"%{int(ulasilan/toplam*100) if toplam else 0}")
+    
+    if ulasilan > 0:
+        fig = px.pie(df, names='Egilim', title='Oy Dağılımı', hole=0.4)
+        st.plotly_chart(fig)
+        
+        if 'Temsilcilik' in df.columns:
+            st.subheader("Bölge Bazlı Durum")
+            bolge_chart = px.bar(df, x='Temsilcilik', color='Egilim')
+            st.plotly_chart(bolge_chart)
+    else:
+        st.info("Henüz veri girişi yapılmamış.")
+
+# --- 2. VERİ GİRİŞİ ---
+elif menu == "📝 Veri Girişi":
+    st.header("📝 Seçmen Bilgisi Güncelle")
+    
+    if user['Rol'] == 'GOZLEM':
+        st.warning("Gözlemciler veri girişi yapamaz.")
+    else:
+        arama = st.text_input("🔍 İsim veya Sicil No Ara")
+        if arama:
+            sonuc = df[df['Ad_Soyad'].astype(str).str.contains(arama, case=False) | df['Sicil_No'].astype(str).str.contains(arama)]
+            
+            if not sonuc.empty:
+                secilen = st.selectbox("Kişi Seç", sonuc['Ad_Soyad'] + " - " + sonuc['Sicil_No'].astype(str))
+                
+                if secilen:
+                    sicil_no = int(secilen.split(" - ")[1])
+                    idx = df[df['Sicil_No'] == sicil_no].index[0]
+                    row_num = idx + 2 
+                    
+                    kisi = df.loc[idx]
+                    
+                    st.info(f"Seçilen: **{kisi['Ad_Soyad']}** ({kisi['Temsilcilik']})")
+                    
+                    with st.form("guncelle"):
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            opt_egilim = ["", "🟡 SARI BLOK", "🟠 KARMA", "🔴 RAKİP", "⚪ KARARSIZ"]
+                            curr_egilim = kisi['Egilim']
+                            def_idx = opt_egilim.index(curr_egilim) if curr_egilim in opt_egilim else 0
+                            
+                            yeni_egilim = st.selectbox("Oy Eğilimi", opt_egilim, index=def_idx)
+                            yeni_ulasim = st.selectbox("Ulaşım", ["Kendi İmkanı", "Otobüs Lazım"], 
+                                                      index=0 if kisi['Ulasim'] == "" else (1 if "Otobüs" in str(kisi['Ulasim']) else 0))
+                        with c2:
+                            yeni_rakip = st.text_input("Rakip Ekleme", value=str(kisi['Rakip_Ekleme']))
+                            yeni_cizik = st.text_input("Çizikler", value=str(kisi['Cizikler']))
+                        
+                        kaydet = st.form_submit_button("✅ Kaydet")
+                        
+                        if kaydet:
+                            try:
+                                col_egilim = df.columns.get_loc("Egilim") + 1
+                                col_ulasim = df.columns.get_loc("Ulasim") + 1
+                                col_rakip = df.columns.get_loc("Rakip_Ekleme") + 1
+                                col_cizik = df.columns.get_loc("Cizikler") + 1
+                                col_son = df.columns.get_loc("Son_Guncelleyen") + 1
+                                
+                                ws.update_cell(row_num, col_egilim, yeni_egilim)
+                                ws.update_cell(row_num, col_ulasim, yeni_ulasim)
+                                ws.update_cell(row_num, col_rakip, yeni_rakip)
+                                ws.update_cell(row_num, col_cizik, yeni_cizik)
+                                ws.update_cell(row_num, col_son, user['Kullanici_Adi'])
+                                
+                                st.success("Kayıt Başarıyla Güncellendi!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Hata oluştu: {e}")
