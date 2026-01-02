@@ -35,13 +35,11 @@ def get_data():
         df.columns = df.columns.str.strip()
         df = df.astype(str)
         
-        # Sütun Garantisi (Hata Önleyici)
         required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022']
         for col in required_cols:
             if col not in df.columns:
                 df[col] = ""
 
-        # Sicil ve Sandık İşlemleri
         def clean_sicil(x):
             try:
                 return int(str(x).replace(".", "").replace(" ", ""))
@@ -59,7 +57,6 @@ def get_data():
         except:
             df['Sandik_No'] = "Belirsiz"
 
-        # Logları Çek
         try:
             ws_log = sheet.worksheet("log_kayitlari")
             data_log = ws_log.get_all_records()
@@ -111,7 +108,73 @@ if st.session_state.user is None:
                 st.error(f"Hata: {e}")
     st.stop()
 
-# --- 4. ANA PROGRAM ---
+# --- 4. POP-UP FORM FONKSİYONU (YENİ) ---
+@st.dialog("✏️ SEÇMEN BİLGİSİ DÜZENLE")
+def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log):
+    st.markdown(f"**{kisi['Ad_Soyad']}** ({kisi.get('Sandik_No', '-')})")
+    
+    is_admin = (user['Rol'] == 'ADMIN')
+    def get(f): return kisi.get(f, "") if is_admin else ""
+
+    with st.form("popup_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            opts_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Çevre Şehircilik", "Emekli", "Diğer"]
+            curr_k = kisi.get('Kurum', "") 
+            n_kurum = st.selectbox("Kurum", opts_kurum, index=opts_kurum.index(curr_k) if curr_k in opts_kurum else 0)
+
+            opts_24 = ["", "Sarı Liste", "Mavi Liste"]
+            curr_24 = get('Gecmis_2024')
+            n_24 = st.selectbox("2024", opts_24, index=opts_24.index(curr_24) if curr_24 in opts_24 else 0)
+            
+            opts_22 = ["", "Sarı Liste", "Mavi Liste", "Beyaz Liste"]
+            curr_22 = get('Gecmis_2022')
+            n_22 = st.selectbox("2022", opts_22, index=opts_22.index(curr_22) if curr_22 in opts_22 else 0)
+
+        with c2:
+            opts_egilim = ["", "Tüm Listemizi Yazar", "Büyük Kısmı Yazar", "Kısmen Yazar", "Karşı Tarafı Destekler", "Kararsızım"]
+            curr_e = get('Egilim')
+            n_egilim = st.selectbox("2026 EĞİLİMİ", opts_egilim, index=opts_egilim.index(curr_e) if curr_e in opts_egilim else 0)
+
+            opts_temas = ["", "Kendim Görüştüm", "Arkadaşım/Akraba Aracılığı", "Tanımıyorum"]
+            curr_t = get('Temas_Durumu')
+            n_temas = st.selectbox("Temas", opts_temas, index=opts_temas.index(curr_t) if curr_t in opts_temas else 0)
+
+            opts_ulasim = ["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek", "Temsilcilikten Gelecek"]
+            curr_u = get('Ulasim')
+            n_ulasim = st.selectbox("Ulaşım", opts_ulasim, index=opts_ulasim.index(curr_u) if curr_u in opts_ulasim else 0)
+
+        n_not = st.text_area("Notlar", value=get('Cizikler'))
+        n_rakip = st.text_input("Rakip Ekleme", value=get('Rakip_Ekleme'))
+        n_ref = st.text_input("Referans", value=get('Referans'))
+
+        if st.form_submit_button("✅ KAYDET VE KAPAT"):
+            try:
+                updates = [
+                    ("Kurum", n_kurum), ("Gecmis_2024", n_24), ("Gecmis_2022", n_22),
+                    ("Egilim", n_egilim), ("Temas_Durumu", n_temas), ("Ulasim", n_ulasim),
+                    ("Cizikler", n_not), ("Rakip_Ekleme", n_rakip), ("Referans", n_ref),
+                    ("Son_Guncelleyen", user['Kullanici_Adi'])
+                ]
+                # Excel Update
+                for col, val in updates:
+                    if col in df_cols:
+                        ws.update_cell(row_n, df_cols.index(col)+1, val)
+                
+                # Log Update
+                if ws_log:
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
+                    ws_log.append_row(log_data)
+                
+                st.success("Kaydedildi!")
+                time.sleep(0.5)
+                st.rerun() # Pencereyi kapatır ve listeyi günceller
+                
+            except Exception as e:
+                st.error(f"Hata: {e}")
+
+# --- 5. ANA EKRAN KODLARI ---
 user = st.session_state.user
 gun = get_countdown()
 st.sidebar.markdown(f"<div style='background-color:#d32f2f;padding:10px;border-radius:5px;text-align:center;color:white;'><h3>⏳ {gun} GÜN</h3></div>", unsafe_allow_html=True)
@@ -124,7 +187,7 @@ if st.sidebar.button("Çıkış Yap"):
 df, ws, df_log, ws_log = get_data()
 
 if df is None:
-    st.error("Veri alınırken hata oluştu. Lütfen sayfayı yenileyin.")
+    st.error("Veri alınırken hata oluştu. Sayfayı yenileyin.")
     st.stop()
 
 if user['Rol'] == 'ADMIN':
@@ -133,7 +196,7 @@ else:
     menu = st.sidebar.radio("Menü", ["📝 Veri Girişi"])
 
 # =========================================================
-# EKRAN 1: PROFESYONEL ANALİZ (YENİLENMİŞ)
+# EKRAN 1: PROFESYONEL ANALİZ
 # =========================================================
 if menu == "📊 PROFESYONEL ANALİZ" and user['Rol'] == 'ADMIN':
     st.title("📊 Stratejik Komuta Merkezi")
@@ -142,72 +205,48 @@ if menu == "📊 PROFESYONEL ANALİZ" and user['Rol'] == 'ADMIN':
     bizimkiler = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     kararsizlar = temas[temas['Egilim'].isin(["Kararsızım", "Kısmen Yazar"])]
 
-    # KPI Kartları
+    # KPI
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Toplam Üye", len(df))
     c2.metric("Sahada Dokunulan", len(temas), f"%{int(len(temas)/len(df)*100) if len(df)>0 else 0}")
-    c3.metric("🟡 KEMİK OYUMUZ", len(bizimkiler), delta_color="normal")
-    c4.metric("⚖️ POTANSİYEL (Kararsız)", len(kararsizlar), delta_color="off")
+    c3.metric("🟡 KEMİK OYUMUZ", len(bizimkiler))
+    c4.metric("⚖️ POTANSİYEL", len(kararsizlar))
 
     st.divider()
 
-    tabs = st.tabs(["📈 MOMENTUM (Gidişat)", "🔥 SICAKLIK HARİTASI", "🗳️ SANDIK DETAY", "🎯 HEDEF", "🏢 KURUMLAR"])
+    tabs = st.tabs(["📈 MOMENTUM", "🔥 SICAKLIK", "🗳️ SANDIKLAR", "🎯 HEDEF", "🏢 KURUMLAR"])
 
-    # 1. MOMENTUM GRAFİĞİ (YENİ - ZAMANLA DEĞİŞİM)
     with tabs[0]:
-        st.subheader("📈 Seçim Çalışması İlerleme Grafiği")
+        st.subheader("📈 Saha İlerleme Grafiği")
         if not df_log.empty and 'Zaman' in df_log.columns:
-            # Zaman sütununu datetime'a çevir ve sadece tarihi al
             df_log['Tarih'] = pd.to_datetime(df_log['Zaman']).dt.date
-            
-            # Günlük yapılan işlem sayısı
             daily_activity = df_log.groupby('Tarih').size().reset_index(name='İşlem Sayısı')
-            
-            fig_trend = px.line(daily_activity, x='Tarih', y='İşlem Sayısı', markers=True, 
-                                title="Günlük Saha Aktivitesi (Ekip Ne Kadar Çalışıyor?)")
+            fig_trend = px.line(daily_activity, x='Tarih', y='İşlem Sayısı', markers=True, title="Günlük Saha Aktivitesi")
             st.plotly_chart(fig_trend, use_container_width=True)
-            
-            st.info("Bu grafik, ekibin her gün kaç kişiye veri girişi yaptığını gösterir. Çizgi yukarı gidiyorsa saha ısınıyor demektir!")
-        else:
-            st.warning("Henüz yeterli log verisi oluşmadı.")
-
-    # 2. SICAKLIK HARİTASI (HEATMAP - YENİ)
-    with tabs[1]:
-        st.subheader("🔥 Kurum - Eğilim Sıcaklık Haritası")
-        st.caption("Koyu renkli kutular yoğunluğu gösterir. Hangi kurumda hangi eğilim hakim?")
-        
-        if not temas.empty:
-            # Gereksiz boşlukları temizle
-            heatmap_data = temas[temas['Kurum'] != ""]
-            
-            fig_heat = px.density_heatmap(heatmap_data, x="Kurum", y="Egilim", 
-                                          title="Kurumsal Eğilim Yoğunluğu", 
-                                          color_continuous_scale="Viridis")
-            st.plotly_chart(fig_heat, use_container_width=True)
         else:
             st.warning("Veri yok.")
 
-    # 3. SANDIK ANALİZİ
+    with tabs[1]:
+        st.subheader("🔥 Kurum - Eğilim Haritası")
+        if not temas.empty:
+            heatmap_data = temas[temas['Kurum'] != ""]
+            fig_heat = px.density_heatmap(heatmap_data, x="Kurum", y="Egilim", title="Yoğunluk Haritası", color_continuous_scale="Viridis")
+            st.plotly_chart(fig_heat, use_container_width=True)
+
     with tabs[2]:
-        st.subheader("🗳️ Sandık Bazlı Detay")
+        st.subheader("🗳️ Sandık Detayı")
         sandik_ozet = temas.groupby(['Sandik_No', 'Egilim']).size().reset_index(name='Kişi')
         if not sandik_ozet.empty:
             fig_sandik = px.bar(sandik_ozet, x="Sandik_No", y="Kişi", color="Egilim", title="Sandık Dağılımı")
             st.plotly_chart(fig_sandik, use_container_width=True)
-        else:
-            st.warning("Veri yok.")
 
-    # 4. HEDEF LİSTESİ
     with tabs[3]:
-        st.subheader("🎯 Fırsat Listesi (İkna Edilebilirler)")
+        st.subheader("🎯 Fırsat Listesi")
         if not kararsizlar.empty:
             h_list = kararsizlar[['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Referans']].copy()
             st.dataframe(h_list, use_container_width=True)
-            st.download_button("📥 İndir (Excel)", h_list.to_csv().encode('utf-8'), 'hedef_liste.csv')
-        else:
-            st.success("Listeniz tertemiz, kararsız üye yok.")
+            st.download_button("📥 İndir", h_list.to_csv().encode('utf-8'), 'hedef.csv')
 
-    # 5. KURUMLAR
     with tabs[4]:
         k_genel = df['Kurum'].value_counts().reset_index()
         k_genel.columns = ['Kurum', 'Top']
@@ -220,7 +259,7 @@ if menu == "📊 PROFESYONEL ANALİZ" and user['Rol'] == 'ADMIN':
         st.plotly_chart(fig_ku, use_container_width=True)
 
 # =========================================================
-# EKRAN 2: VERİ GİRİŞİ (SAYFA ZIPLAMASI DÜZELTİLDİ)
+# EKRAN 2: VERİ GİRİŞİ (POP-UP AKTİF)
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
@@ -229,101 +268,42 @@ elif menu == "📝 Veri Girişi":
     if is_admin: st.success("YETKİLİ MODU")
     else: st.info("SAHA MODU")
 
-    # --- ARAMA KUTUSU DURUMUNU KORUMA (SESSION STATE) ---
+    # Arama Hafızası
     if 'search_term' not in st.session_state:
         st.session_state.search_term = ""
 
-    # Text input'u session state'e bağlıyoruz
     def update_search():
         st.session_state.search_term = st.session_state.widget_search
 
-    search = st.text_input("🔍 İsim Ara (Aramanız silinmez)", 
+    search = st.text_input("🔍 İsim Ara (Liste aşağıdadır)", 
                            value=st.session_state.search_term, 
                            key="widget_search", 
                            on_change=update_search)
     
-    # --- TABLOYU FİLTRELE ---
     cols = ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Egilim', 'Son_Guncelleyen'] if is_admin else ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum']
     
     if search:
         df_show = df[df['Ad_Soyad'].str.contains(search, case=False, na=False)]
     else:
-        # Boşsa sadece ilk 10 kişiyi göster ki sayfa çok uzamasın (Performans için)
-        df_show = df.head(50) 
-        if not search:
-            st.caption("💡 Tüm liste yerine arama yaparak ilerlemeniz önerilir.")
+        df_show = df 
 
-    # Tabloyu Göster
-    event = st.dataframe(df_show[cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    # Tablo (Seçim Aktif)
+    event = st.dataframe(
+        df_show[cols], 
+        use_container_width=True, 
+        hide_index=True, 
+        on_select="rerun", 
+        selection_mode="single-row"
+    )
 
+    # SEÇİM YAPILINCA POP-UP AÇ
     if len(event.selection.rows) > 0:
         idx = event.selection.rows[0]
         sicil = df_show.iloc[idx]['Sicil_No']
         
-        # Gerçek indexi bul
         g_idx = df[df['Sicil_No'] == sicil].index[0]
         row_n = g_idx + 2
         kisi = df.iloc[g_idx]
-
-        st.divider()
-        st.markdown(f"### ✏️ **{kisi['Ad_Soyad']}**")
-        st.caption(f"📌 {kisi.get('Sandik_No', 'Belirsiz')}")
-
-        with st.form("entry_form"):
-            def get(f): return kisi.get(f, "") if is_admin else ""
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                opts_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Çevre Şehircilik", "Emekli", "Diğer"]
-                curr_k = kisi.get('Kurum', "") 
-                n_kurum = st.selectbox("Kurum", opts_kurum, index=opts_kurum.index(curr_k) if curr_k in opts_kurum else 0)
-
-                opts_24 = ["", "Sarı Liste", "Mavi Liste"]
-                curr_24 = get('Gecmis_2024')
-                n_24 = st.selectbox("2024", opts_24, index=opts_24.index(curr_24) if curr_24 in opts_24 else 0)
-                
-                opts_22 = ["", "Sarı Liste", "Mavi Liste", "Beyaz Liste"]
-                curr_22 = get('Gecmis_2022')
-                n_22 = st.selectbox("2022", opts_22, index=opts_22.index(curr_22) if curr_22 in opts_22 else 0)
-
-            with c2:
-                opts_egilim = ["", "Tüm Listemizi Yazar", "Büyük Kısmı Yazar", "Kısmen Yazar", "Karşı Tarafı Destekler", "Kararsızım"]
-                curr_e = get('Egilim')
-                n_egilim = st.selectbox("2026 EĞİLİMİ", opts_egilim, index=opts_egilim.index(curr_e) if curr_e in opts_egilim else 0)
-
-                opts_temas = ["", "Kendim Görüştüm", "Arkadaşım/Akraba Aracılığı", "Tanımıyorum"]
-                curr_t = get('Temas_Durumu')
-                n_temas = st.selectbox("Temas", opts_temas, index=opts_temas.index(curr_t) if curr_t in opts_temas else 0)
-
-                opts_ulasim = ["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek", "Temsilcilikten Gelecek"]
-                curr_u = get('Ulasim')
-                n_ulasim = st.selectbox("Ulaşım", opts_ulasim, index=opts_ulasim.index(curr_u) if curr_u in opts_ulasim else 0)
-
-            n_not = st.text_area("Notlar", value=get('Cizikler'))
-            n_rakip = st.text_input("Rakip Ekleme", value=get('Rakip_Ekleme'))
-            n_ref = st.text_input("Referans", value=get('Referans'))
-
-            if st.form_submit_button("✅ KAYDET"):
-                try:
-                    headers = df.columns.tolist()
-                    updates = [
-                        ("Kurum", n_kurum), ("Gecmis_2024", n_24), ("Gecmis_2022", n_22),
-                        ("Egilim", n_egilim), ("Temas_Durumu", n_temas), ("Ulasim", n_ulasim),
-                        ("Cizikler", n_not), ("Rakip_Ekleme", n_rakip), ("Referans", n_ref),
-                        ("Son_Guncelleyen", user['Kullanici_Adi'])
-                    ]
-                    for col, val in updates:
-                        if col in headers:
-                            ws.update_cell(row_n, headers.index(col)+1, val)
-                    
-                    if ws_log:
-                        now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
-                        ws_log.append_row(log_data)
-                    
-                    # Sayfa zıplamasını engellemek için sessiz bildirim
-                    st.toast("✅ Başarıyla Kaydedildi!", icon="💾")
-                    time.sleep(1) # Kısa bir bekleme
-                    
-                except Exception as e:
-                    st.error(f"Hata: {e}")
+        
+        # Pop-up Fonksiyonunu Çağır
+        entry_form_dialog(kisi, row_n, sicil, user, df.columns.tolist(), ws, ws_log)
