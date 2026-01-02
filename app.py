@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
+import math
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(
@@ -15,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- 1. BAĞLANTI ---
+# --- 1. BAĞLANTIYI KUR ---
 @st.cache_resource
 def get_connection():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -24,7 +25,7 @@ def get_connection():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. VERİ ÇEKME ---
+# --- 2. VERİLERİ ÇEK ---
 def get_data():
     client = get_connection()
     try:
@@ -35,13 +36,11 @@ def get_data():
         df.columns = df.columns.str.strip()
         df = df.astype(str)
         
-        # Sütun Garantisi
         required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022']
         for col in required_cols:
             if col not in df.columns:
                 df[col] = ""
 
-        # Sicil ve Sandık
         def clean_sicil(x):
             try:
                 return int(str(x).replace(".", "").replace(" ", ""))
@@ -59,7 +58,6 @@ def get_data():
         except:
             df['Sandik_No'] = "Belirsiz"
 
-        # Loglar
         try:
             ws_log = sheet.worksheet("log_kayitlari")
             data_log = ws_log.get_all_records()
@@ -111,7 +109,7 @@ if st.session_state.user is None:
                 st.error(f"Hata: {e}")
     st.stop()
 
-# --- 4. POP-UP FORM (SESSİZ KAYIT - YENİLEME YOK) ---
+# --- 4. POP-UP FORM ---
 @st.dialog("✏️ SEÇMEN BİLGİSİ DÜZENLE")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log):
     st.markdown(f"**{kisi['Ad_Soyad']}** ({kisi.get('Sandik_No', '-')})")
@@ -159,19 +157,18 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log):
                     ("Cizikler", n_not), ("Rakip_Ekleme", n_rakip), ("Referans", n_ref),
                     ("Son_Guncelleyen", user['Kullanici_Adi'])
                 ]
-                # Excel Güncelle
                 for col, val in updates:
                     if col in df_cols:
                         ws.update_cell(row_n, df_cols.index(col)+1, val)
                 
-                # Log Ekle
                 if ws_log:
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
                     ws_log.append_row(log_data)
                 
-                st.toast("✅ Başarıyla Kaydedildi!", icon="💾")
-                # DİKKAT: st.rerun() YOK! Sayfa yenilenmez, zıplama olmaz.
+                st.success("Kaydedildi!")
+                time.sleep(1)
+                st.rerun() # Veriyi yenilemek için mecburen rerun yapıyoruz ama sayfalama sayesinde yerinde kalacak.
                 
             except Exception as e:
                 st.error(f"Hata: {e}")
@@ -198,128 +195,85 @@ else:
     menu = st.sidebar.radio("Menü", ["📝 Veri Girişi"])
 
 # =========================================================
-# ANALİZ (YENİLENMİŞ - ZAFER ÇUBUĞU EKLENDİ)
+# ANALİZ
 # =========================================================
 if menu == "📊 ANALİZ RAPORU" and user['Rol'] == 'ADMIN':
     st.title("📊 Seçim Komuta Masası")
     
-    # Temel Veriler
-    toplam_uye = len(df)
     temas = df[df['Egilim'].str.len() > 1]
-    
-    # Kitleler
     bizimkiler = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     kararsizlar = temas[temas['Egilim'].isin(["Kararsızım", "Kısmen Yazar"])]
-    rakipler = temas[temas['Egilim'] == "Karşı Tarafı Destekler"]
-    
-    # Hedef (Salt Çoğunluk)
-    hedef_oy = int(toplam_uye / 2) + 1
+    hedef_oy = int(len(df) / 2) + 1
     bizim_sayi = len(bizimkiler)
-    
-    # --- ÜST METRİKLER (CİDDİ ORANLAR) ---
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Toplam Oda Üyesi", toplam_uye, "Hedef Kitle")
-    c2.metric("Sahada Dokunulan", len(temas), f"%{int(len(temas)/toplam_uye*100) if toplam_uye else 0} Kapsama")
+    c1.metric("Toplam Oda Üyesi", len(df), "Hedef Kitle")
+    c2.metric("Sahada Dokunulan", len(temas), f"%{int(len(temas)/len(df)*100) if len(df) else 0}")
     c3.metric("🟡 BİZİM OYLAR", bizim_sayi, f"Hedefin %{int(bizim_sayi/hedef_oy*100) if hedef_oy else 0}'i")
-    c4.metric("Kazanmak İçin Gereken", hedef_oy - bizim_sayi, "Kalan", delta_color="inverse")
+    c4.metric("Kazanmak İçin Gereken", hedef_oy - bizim_sayi, delta_color="inverse")
     
     st.divider()
 
-    # --- ZAFER ÇUBUĞU (YENİ) ---
-    st.subheader("🏆 Zafer Metresi (Hedef: 50% + 1)")
+    # Zafer Metresi
+    st.subheader("🏆 Zafer Metresi")
     fig_gauge = go.Figure(go.Indicator(
-        mode = "gauge+number+delta",
-        value = bizim_sayi,
+        mode = "gauge+number+delta", value = bizim_sayi,
         domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': "Kazanılan Oy Sayısı"},
         delta = {'reference': hedef_oy, 'increasing': {'color': "green"}},
-        gauge = {
-            'axis': {'range': [None, toplam_uye], 'tickwidth': 1, 'tickcolor': "darkblue"},
-            'bar': {'color': "#f1c40f"}, # Sarı Renk
-            'bgcolor': "white",
-            'borderwidth': 2,
-            'bordercolor': "gray",
-            'steps': [
-                {'range': [0, hedef_oy], 'color': '#ecf0f1'},
-                {'range': [hedef_oy, toplam_uye], 'color': '#2ecc71'}], # Hedefi geçince yeşil alan
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': hedef_oy}}))
+        gauge = {'axis': {'range': [None, len(df)]}, 'bar': {'color': "#f1c40f"}, 'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': hedef_oy}}))
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-    # --- SEKMELER (ESKİ DÜZEN GERİ GELDİ) ---
-    tabs = st.tabs(["🌍 GENEL DURUM", "🗳️ SANDIK ANALİZİ", "🏢 KURUMLAR", "🎯 FIRSAT LİSTESİ", "⚡ EKİP LİGİ"])
+    tabs = st.tabs(["🌍 GENEL", "🗳️ SANDIKLAR", "🏢 KURUMLAR", "🎯 FIRSAT", "⚡ EKİP"])
 
-    # 1. GENEL DURUM (TÜM ÜYE BAZLI)
     with tabs[0]:
-        col_g1, col_g2 = st.columns(2)
-        with col_g1:
-            st.subheader("Genel Üye Dağılımı")
-            # Tüm üyeler üzerinden pasta (Ulaşılmayanlar Dahil)
-            # Ulaşılmayanları "Belirsiz" olarak etiketleyip grafiğe katalım
+        c1, c2 = st.columns(2)
+        with c1:
             temp_df = df.copy()
             temp_df.loc[temp_df['Egilim'] == "", 'Egilim'] = "Henüz Görüşülmedi"
-            fig_genel = px.pie(temp_df, names='Egilim', title='Tüm Odanın Röntgeni (2000+ Kişi)', hole=0.4)
+            fig_genel = px.pie(temp_df, names='Egilim', title='Genel Dağılım', hole=0.4)
             st.plotly_chart(fig_genel, use_container_width=True)
-            
-        with col_g2:
-            st.subheader("Ulaşılanların Durumu")
+        with c2:
             if not temas.empty:
-                fig_temas = px.pie(temas, names='Egilim', title='Sadece Görüşülenlerin Dağılımı', hole=0.4)
+                fig_temas = px.pie(temas, names='Egilim', title='Ulaşılanların Dağılımı', hole=0.4)
                 st.plotly_chart(fig_temas, use_container_width=True)
-            else:
-                st.info("Veri yok.")
 
-    # 2. SANDIK ANALİZİ
     with tabs[1]:
-        st.subheader("🗳️ Sandık Bazlı Güç Analizi")
         sandik_ozet = temas.groupby(['Sandik_No', 'Egilim']).size().reset_index(name='Kişi')
         if not sandik_ozet.empty:
-            fig_sandik = px.bar(sandik_ozet, x="Sandik_No", y="Kişi", color="Egilim", 
-                                title="Sandıklara Göre Oy Dağılımı", text_auto=True)
+            fig_sandik = px.bar(sandik_ozet, x="Sandik_No", y="Kişi", color="Egilim", title="Sandık Analizi")
             st.plotly_chart(fig_sandik, use_container_width=True)
             st.dataframe(pd.crosstab(temas['Sandik_No'], temas['Egilim']), use_container_width=True)
-        else:
-            st.warning("Veri yok.")
 
-    # 3. KURUMLAR
     with tabs[2]:
-        st.subheader("🏢 Kurum Bazlı Başarı")
         k_genel = df['Kurum'].value_counts().reset_index()
         k_genel.columns = ['Kurum', 'Top']
         k_bizim = bizimkiler['Kurum'].value_counts().reset_index()
         k_bizim.columns = ['Kurum', 'Biz']
-        
         m = pd.merge(k_genel, k_bizim, on='Kurum', how='left').fillna(0)
-        m = m[m['Top'] > 0] # Sadece üyesi olan kurumlar
+        m = m[m['Top'] > 0]
         m['Oran'] = (m['Biz'] / m['Top'] * 100).astype(int)
         m = m.sort_values(by='Oran', ascending=False)
-        
-        fig_ku = px.bar(m, x='Kurum', y='Oran', text='Biz', color='Oran', title="Kurum Hakimiyet Oranı (%)")
+        fig_ku = px.bar(m, x='Kurum', y='Oran', text='Biz', color='Oran', title="Kurum Başarısı (%)")
         st.plotly_chart(fig_ku, use_container_width=True)
 
-    # 4. HEDEF
     with tabs[3]:
-        st.subheader("🎯 Fırsat Listesi (Kararsızlar)")
         if not kararsizlar.empty:
-            h_list = kararsizlar[['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Referans', 'Temas_Durumu']].copy()
+            h_list = kararsizlar[['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Referans']].copy()
             st.dataframe(h_list, use_container_width=True)
-            st.download_button("📥 İndir (Excel)", h_list.to_csv().encode('utf-8'), 'hedef_liste.csv')
+            st.download_button("📥 İndir", h_list.to_csv().encode('utf-8'), 'hedef.csv')
         else:
-            st.success("Kararsız üye yok.")
+            st.success("Kararsız yok.")
 
-    # 5. EKİP
     with tabs[4]:
-        st.subheader("⚡ Ekip Performansı")
         if not df_log.empty:
             perf = df_log['Kullanici'].value_counts().reset_index()
             perf.columns = ['İsim', 'İşlem']
             st.bar_chart(perf.set_index('İsim'))
             st.dataframe(df_log.tail(10), use_container_width=True)
 
+
 # =========================================================
-# VERİ GİRİŞİ (SESSİZ KAYIT - ZIPLAMA YOK)
+# VERİ GİRİŞİ (SAYFALAMA SİSTEMİ)
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
@@ -329,24 +283,43 @@ elif menu == "📝 Veri Girişi":
     else: st.info("SAHA MODU")
 
     # Arama
-    if 'search_term' not in st.session_state:
-        st.session_state.search_term = ""
-
-    def update_search():
-        st.session_state.search_term = st.session_state.widget_search
-
-    search = st.text_input("🔍 İsim Ara (Liste aşağıdadır)", 
-                           value=st.session_state.search_term, 
-                           key="widget_search", 
-                           on_change=update_search)
+    if 'search_term' not in st.session_state: st.session_state.search_term = ""
+    def update_search(): st.session_state.search_term = st.session_state.widget_search
+    search = st.text_input("🔍 İsim Ara", value=st.session_state.search_term, key="widget_search", on_change=update_search)
     
     cols = ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Egilim', 'Son_Guncelleyen'] if is_admin else ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum']
     
+    # --- SAYFALAMA MANTIĞI ---
     if search:
+        # Arama varsa sayfalama yok, hepsini göster
         df_show = df[df['Ad_Soyad'].str.contains(search, case=False, na=False)]
+        st.caption(f"🔍 '{search}' araması için {len(df_show)} sonuç bulundu.")
     else:
-        df_show = df 
+        # Arama yoksa SAYFALAMA VAR
+        page_size = 50
+        total_pages = math.ceil(len(df) / page_size)
+        
+        # Sayfa Seçici (Session state ile hafızada tut)
+        if 'page_number' not in st.session_state:
+            st.session_state.page_number = 1
+            
+        # Sayfa butonları
+        c_prev, c_page, c_next = st.columns([1, 2, 1])
+        with c_prev:
+            if st.button("⬅️ Önceki") and st.session_state.page_number > 1:
+                st.session_state.page_number -= 1
+        with c_next:
+            if st.button("Sonraki ➡️") and st.session_state.page_number < total_pages:
+                st.session_state.page_number += 1
+        with c_page:
+            st.markdown(f"**Sayfa {st.session_state.page_number} / {total_pages}**")
 
+        # Dilimi seç
+        start_idx = (st.session_state.page_number - 1) * page_size
+        end_idx = start_idx + page_size
+        df_show = df.iloc[start_idx:end_idx]
+
+    # Tablo
     event = st.dataframe(
         df_show[cols], 
         use_container_width=True, 
