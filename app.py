@@ -22,7 +22,7 @@ def get_connection():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. VERİLERİ ÇEK VE İŞLE ---
+# --- 2. VERİLERİ ÇEK VE İŞLE (HATA KORUMALI) ---
 def get_data():
     client = get_connection()
     try:
@@ -30,9 +30,15 @@ def get_data():
         ws = sheet.worksheet("secmenler")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
-        df.columns = df.columns.str.strip()
+        df.columns = df.columns.str.strip() # Boşlukları temizle
         df = df.astype(str)
         
+        # EKSİK SÜTUN KONTROLÜ (HAYAT KURTARAN KISIM)
+        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022']
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = "" # Sütun yoksa boş olarak oluştur, hata verme!
+
         # --- SICIL DÜZELTME VE SANDIK ATAMA ---
         def clean_sicil(x):
             try:
@@ -115,7 +121,7 @@ if st.sidebar.button("Çıkış Yap"):
 df, ws, df_log, ws_log = get_data()
 
 if df is None:
-    st.error("Bağlantı Hatası. Sayfayı yenileyin.")
+    st.error("Veri alınırken hata oluştu. Lütfen sayfayı yenileyin.")
     st.stop()
 
 if user['Rol'] == 'ADMIN':
@@ -135,7 +141,7 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Toplam Üye", len(df))
-    c2.metric("Ulaşılan", len(temas), f"%{int(len(temas)/len(df)*100)}")
+    c2.metric("Ulaşılan", len(temas), f"%{int(len(temas)/len(df)*100) if len(df) > 0 else 0}")
     c3.metric("🟡 KEMİK OY", len(bizimkiler))
     c4.metric("⚖️ KARARSIZ", len(kararsizlar))
 
@@ -157,6 +163,7 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
     with tabs[1]:
         st.subheader("🎯 Fırsat Listesi")
         if not kararsizlar.empty:
+            # Burası artık hata vermez çünkü yukarıda 'Referans' sütununu garantiye aldık
             h_list = kararsizlar[['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Referans']].copy()
             st.dataframe(h_list, use_container_width=True)
             st.download_button("📥 İndir", h_list.to_csv().encode('utf-8'), 'firsat_listesi.csv')
@@ -229,7 +236,6 @@ elif menu == "📝 Veri Girişi":
             
             c1, c2 = st.columns(2)
             with c1:
-                # --- GÜNCELLENMİŞ KURUM LİSTESİ ---
                 opts_kurum = [
                     "", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", 
                     "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", 
