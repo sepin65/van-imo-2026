@@ -6,12 +6,12 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import pytz
 
-# --- MOBİL UYUMLU AYARLAR ---
+# --- SAYFA AYARLARI ---
 st.set_page_config(
     page_title="İMO Van 2026", 
     layout="wide", 
     page_icon="🏗️",
-    initial_sidebar_state="collapsed" # Telefondan girince menü kapalı gelsin, yer kaplamasın
+    initial_sidebar_state="expanded"
 )
 
 # --- 1. BAĞLANTIYI KUR ---
@@ -46,12 +46,25 @@ def get_data():
     except Exception as e:
         return None, None, None, None
 
+# --- SAYAÇ HESAPLAMA FONKSİYONU ---
+def get_countdown():
+    tz = pytz.timezone('Turkey')
+    target_date = datetime(2026, 2, 14, 8, 0, 0, tzinfo=tz) # Seçim sabahı 08:00
+    now = datetime.now(tz)
+    remaining = target_date - now
+    return remaining.days
+
 # --- 3. GİRİŞ EKRANI ---
 if 'user' not in st.session_state:
     st.session_state.user = None
 
 if st.session_state.user is None:
     st.title("🏗️ İMO SEÇİM SİSTEMİ")
+    
+    # Giriş ekranında da sayaç olsun, motivasyon olsun :)
+    kalan_gun = get_countdown()
+    st.info(f"⏳ BÜYÜK SEÇİME **{kalan_gun}** GÜN KALDI!")
+    
     with st.form("giris_formu"):
         kadi = st.text_input("Kullanıcı Adı")
         sifre = st.text_input("Şifre", type="password")
@@ -74,6 +87,19 @@ if st.session_state.user is None:
 
 # --- 4. ANA PROGRAM ---
 user = st.session_state.user
+
+# --- SOL MENÜ (SAYAÇLI) ---
+kalan_gun = get_countdown()
+st.sidebar.markdown(
+    f"""
+    <div style="background-color:#d32f2f;padding:10px;border-radius:5px;text-align:center;color:white;margin-bottom:10px;">
+        <h3 style="margin:0;color:white;">⏳ {kalan_gun} GÜN</h3>
+        <small>SEÇİME KALAN</small>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
+
 st.sidebar.markdown(f"### 👤 {user['Kullanici_Adi']}")
 if st.sidebar.button("Çıkış Yap"):
     st.session_state.user = None
@@ -95,7 +121,7 @@ else:
 # EKRAN 1: 360 DERECE STRATEJİK ANALİZ (SADECE ADMIN)
 # =========================================================
 if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
-    st.title("📊 Seçim Komuta Masası")
+    st.title(f"📊 Seçim Komuta Masası (Kalan: {kalan_gun} Gün)")
     
     # Veri Hazırlığı
     toplam = len(df)
@@ -117,31 +143,30 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
     c1.metric("Toplam Üye", toplam)
     c2.metric("Ulaşılan", len(temas), f"%{int(len(temas)/toplam*100) if toplam else 0}")
     c3.metric("🟡 KEMİK OY", len(bizimkiler))
-    c4.metric("⚖️ KARARSIZ (Fırsat)", len(kararsizlar), delta_color="off")
+    c4.metric("⚖️ KARARSIZ", len(kararsizlar))
 
     st.divider()
 
     # Sekmeler
-    tabs = st.tabs(["🎯 AKILLI HEDEF LİSTESİ", "🌍 Genel Durum", "🏗️ Kuşak Analizi", "🏢 Kurumlar", "⚡ Ekip Ligi"])
+    tabs = st.tabs(["🎯 HEDEF LİSTESİ", "🌍 Genel Durum", "🏗️ Kuşak Analizi", "🏢 Kurumlar", "⚡ Ekip Ligi"])
 
-    # 1. AKILLI HEDEF LİSTESİ (YENİ VE ÖNEMLİ)
+    # 1. AKILLI HEDEF LİSTESİ
     with tabs[0]:
-        st.subheader("🎯 Kazanabileceğimiz Seçmenler (Fırsat Listesi)")
-        st.info("Bu liste, 'Kararsız' veya 'Kısmen Yazar' diyenleri, senin müdahalenle dönebilecek kişileri gösterir.")
+        st.subheader("🎯 Kazanılacak Potansiyel Seçmenler")
+        st.info("Bu liste, 'Kararsız' veya 'Kısmen Yazar' diyenleri listeler. İndirip ekibe dağıtabilirsin.")
         
         if not kararsizlar.empty:
-            # Sadece önemli sütunları al
             hedef_liste = kararsizlar[['Sicil_No', 'Ad_Soyad', 'Kurum', 'Referans', 'Temas_Durumu']].copy()
             st.dataframe(hedef_liste, use_container_width=True, hide_index=True)
             
             st.download_button(
-                label="📥 Bu Listeyi İndir (Excel)",
+                label="📥 Listeyi İndir (Excel)",
                 data=hedef_liste.to_csv(index=False).encode('utf-8'),
                 file_name='aranacak_kararsizlar.csv',
                 mime='text/csv'
             )
         else:
-            st.success("Harika! Şu an sistemde kayıtlı 'Kararsız' üye yok.")
+            st.success("Harika! Sistemde kayıtlı 'Kararsız' üye yok.")
 
     # 2. GENEL DURUM
     with tabs[1]:
@@ -209,7 +234,7 @@ elif menu == "📝 Veri Girişi":
 
     search = st.text_input("🔍 İsim Ara", placeholder="Ad Soyad...")
     
-    # Liste Görünümü Ayarı
+    # Liste Görünümü
     cols = ['Sicil_No', 'Ad_Soyad', 'Kurum', 'Egilim', 'Son_Guncelleyen'] if is_admin else ['Sicil_No', 'Ad_Soyad', 'Kurum']
     
     if search:
@@ -240,7 +265,7 @@ elif menu == "📝 Veri Girişi":
                 c1, c2 = st.columns(2)
                 with c1:
                     opts_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Diğer"]
-                    curr_k = kisi.get('Kurum', "") # Kurum hep görünür
+                    curr_k = kisi.get('Kurum', "") 
                     idx_k = opts_kurum.index(curr_k) if curr_k in opts_kurum else 0
                     n_kurum = st.selectbox("Kurum", opts_kurum, index=idx_k)
 
