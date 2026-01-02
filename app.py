@@ -2,8 +2,10 @@ import streamlit as st
 import pandas as pd
 import gspread
 import plotly.express as px
+import plotly.graph_objects as go
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+import time
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(
@@ -22,7 +24,7 @@ def get_connection():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. VERİLERİ ÇEK VE İŞLE (HATA KORUMALI) ---
+# --- 2. VERİLERİ ÇEK VE İŞLE ---
 def get_data():
     client = get_connection()
     try:
@@ -30,16 +32,16 @@ def get_data():
         ws = sheet.worksheet("secmenler")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
-        df.columns = df.columns.str.strip() # Boşlukları temizle
+        df.columns = df.columns.str.strip()
         df = df.astype(str)
         
-        # EKSİK SÜTUN KONTROLÜ (HAYAT KURTARAN KISIM)
+        # Sütun Garantisi (Hata Önleyici)
         required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022']
         for col in required_cols:
             if col not in df.columns:
-                df[col] = "" # Sütun yoksa boş olarak oluştur, hata verme!
+                df[col] = ""
 
-        # --- SICIL DÜZELTME VE SANDIK ATAMA ---
+        # Sicil ve Sandık İşlemleri
         def clean_sicil(x):
             try:
                 return int(str(x).replace(".", "").replace(" ", ""))
@@ -57,6 +59,7 @@ def get_data():
         except:
             df['Sandik_No'] = "Belirsiz"
 
+        # Logları Çek
         try:
             ws_log = sheet.worksheet("log_kayitlari")
             data_log = ws_log.get_all_records()
@@ -125,64 +128,87 @@ if df is None:
     st.stop()
 
 if user['Rol'] == 'ADMIN':
-    menu = st.sidebar.radio("Menü", ["📊 360° STRATEJİK ANALİZ", "📝 Veri Girişi"])
+    menu = st.sidebar.radio("Menü", ["📊 PROFESYONEL ANALİZ", "📝 Veri Girişi"])
 else:
     menu = st.sidebar.radio("Menü", ["📝 Veri Girişi"])
 
 # =========================================================
-# EKRAN 1: ANALİZ
+# EKRAN 1: PROFESYONEL ANALİZ (YENİLENMİŞ)
 # =========================================================
-if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
-    st.title("📊 Seçim Komuta Masası")
+if menu == "📊 PROFESYONEL ANALİZ" and user['Rol'] == 'ADMIN':
+    st.title("📊 Stratejik Komuta Merkezi")
     
     temas = df[df['Egilim'].str.len() > 1]
     bizimkiler = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     kararsizlar = temas[temas['Egilim'].isin(["Kararsızım", "Kısmen Yazar"])]
 
+    # KPI Kartları
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Toplam Üye", len(df))
-    c2.metric("Ulaşılan", len(temas), f"%{int(len(temas)/len(df)*100) if len(df) > 0 else 0}")
-    c3.metric("🟡 KEMİK OY", len(bizimkiler))
-    c4.metric("⚖️ KARARSIZ", len(kararsizlar))
+    c2.metric("Sahada Dokunulan", len(temas), f"%{int(len(temas)/len(df)*100) if len(df)>0 else 0}")
+    c3.metric("🟡 KEMİK OYUMUZ", len(bizimkiler), delta_color="normal")
+    c4.metric("⚖️ POTANSİYEL (Kararsız)", len(kararsizlar), delta_color="off")
 
     st.divider()
 
-    tabs = st.tabs(["🗳️ SANDIK ANALİZİ", "🎯 Hedefler", "🌍 Genel", "🏢 Kurumlar", "⚡ Ekip"])
+    tabs = st.tabs(["📈 MOMENTUM (Gidişat)", "🔥 SICAKLIK HARİTASI", "🗳️ SANDIK DETAY", "🎯 HEDEF", "🏢 KURUMLAR"])
 
+    # 1. MOMENTUM GRAFİĞİ (YENİ - ZAMANLA DEĞİŞİM)
     with tabs[0]:
-        st.subheader("🗳️ Sandık Bazlı Güç Analizi")
-        sandik_ozet = temas.groupby(['Sandik_No', 'Egilim']).size().reset_index(name='Kişi Sayısı')
-        if not sandik_ozet.empty:
-            fig_sandik = px.bar(sandik_ozet, x="Sandik_No", y="Kişi Sayısı", color="Egilim", 
-                                title="Sandıklara Göre Oy Dağılımı", text_auto=True)
-            st.plotly_chart(fig_sandik, use_container_width=True)
-            st.dataframe(pd.crosstab(temas['Sandik_No'], temas['Egilim']), use_container_width=True)
+        st.subheader("📈 Seçim Çalışması İlerleme Grafiği")
+        if not df_log.empty and 'Zaman' in df_log.columns:
+            # Zaman sütununu datetime'a çevir ve sadece tarihi al
+            df_log['Tarih'] = pd.to_datetime(df_log['Zaman']).dt.date
+            
+            # Günlük yapılan işlem sayısı
+            daily_activity = df_log.groupby('Tarih').size().reset_index(name='İşlem Sayısı')
+            
+            fig_trend = px.line(daily_activity, x='Tarih', y='İşlem Sayısı', markers=True, 
+                                title="Günlük Saha Aktivitesi (Ekip Ne Kadar Çalışıyor?)")
+            st.plotly_chart(fig_trend, use_container_width=True)
+            
+            st.info("Bu grafik, ekibin her gün kaç kişiye veri girişi yaptığını gösterir. Çizgi yukarı gidiyorsa saha ısınıyor demektir!")
+        else:
+            st.warning("Henüz yeterli log verisi oluşmadı.")
+
+    # 2. SICAKLIK HARİTASI (HEATMAP - YENİ)
+    with tabs[1]:
+        st.subheader("🔥 Kurum - Eğilim Sıcaklık Haritası")
+        st.caption("Koyu renkli kutular yoğunluğu gösterir. Hangi kurumda hangi eğilim hakim?")
+        
+        if not temas.empty:
+            # Gereksiz boşlukları temizle
+            heatmap_data = temas[temas['Kurum'] != ""]
+            
+            fig_heat = px.density_heatmap(heatmap_data, x="Kurum", y="Egilim", 
+                                          title="Kurumsal Eğilim Yoğunluğu", 
+                                          color_continuous_scale="Viridis")
+            st.plotly_chart(fig_heat, use_container_width=True)
         else:
             st.warning("Veri yok.")
 
-    with tabs[1]:
-        st.subheader("🎯 Fırsat Listesi")
+    # 3. SANDIK ANALİZİ
+    with tabs[2]:
+        st.subheader("🗳️ Sandık Bazlı Detay")
+        sandik_ozet = temas.groupby(['Sandik_No', 'Egilim']).size().reset_index(name='Kişi')
+        if not sandik_ozet.empty:
+            fig_sandik = px.bar(sandik_ozet, x="Sandik_No", y="Kişi", color="Egilim", title="Sandık Dağılımı")
+            st.plotly_chart(fig_sandik, use_container_width=True)
+        else:
+            st.warning("Veri yok.")
+
+    # 4. HEDEF LİSTESİ
+    with tabs[3]:
+        st.subheader("🎯 Fırsat Listesi (İkna Edilebilirler)")
         if not kararsizlar.empty:
-            # Burası artık hata vermez çünkü yukarıda 'Referans' sütununu garantiye aldık
             h_list = kararsizlar[['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Referans']].copy()
             st.dataframe(h_list, use_container_width=True)
-            st.download_button("📥 İndir", h_list.to_csv().encode('utf-8'), 'firsat_listesi.csv')
+            st.download_button("📥 İndir (Excel)", h_list.to_csv().encode('utf-8'), 'hedef_liste.csv')
         else:
-            st.success("Kararsız üye yok.")
+            st.success("Listeniz tertemiz, kararsız üye yok.")
 
-    with tabs[2]:
-        c_pie, c_bar = st.columns(2)
-        with c_pie:
-            fig_p = px.pie(temas, names='Egilim', title="Genel Pasta", hole=0.4)
-            st.plotly_chart(fig_p, use_container_width=True)
-        with c_bar:
-            if 'Gecmis_2024' in temas.columns:
-                gecis = temas[temas['Gecmis_2024'].str.len() > 1]
-                if not gecis.empty:
-                    fig_s = px.histogram(gecis, x="Gecmis_2024", color="Egilim", barmode="group", title="Geçiş Analizi")
-                    st.plotly_chart(fig_s, use_container_width=True)
-
-    with tabs[3]:
+    # 5. KURUMLAR
+    with tabs[4]:
         k_genel = df['Kurum'].value_counts().reset_index()
         k_genel.columns = ['Kurum', 'Top']
         k_bizim = bizimkiler['Kurum'].value_counts().reset_index()
@@ -193,36 +219,48 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
         fig_ku = px.bar(m, x='Kurum', y='Oran', text='Biz', color='Oran', title="Kurum Başarısı (%)")
         st.plotly_chart(fig_ku, use_container_width=True)
 
-    with tabs[4]:
-        if not df_log.empty:
-            perf = df_log['Kullanici'].value_counts().reset_index()
-            perf.columns = ['İsim', 'İşlem']
-            st.bar_chart(perf.set_index('İsim'))
-            st.dataframe(df_log.tail(10), use_container_width=True)
-
 # =========================================================
-# EKRAN 2: VERİ GİRİŞİ
+# EKRAN 2: VERİ GİRİŞİ (SAYFA ZIPLAMASI DÜZELTİLDİ)
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
-    is_admin = (user['Rol'] == 'ADMIN')
     
+    is_admin = (user['Rol'] == 'ADMIN')
     if is_admin: st.success("YETKİLİ MODU")
-    else: st.info("SAHA MODU (Gizli Giriş)")
+    else: st.info("SAHA MODU")
 
-    search = st.text_input("🔍 İsim Ara", placeholder="Ad Soyad...")
+    # --- ARAMA KUTUSU DURUMUNU KORUMA (SESSION STATE) ---
+    if 'search_term' not in st.session_state:
+        st.session_state.search_term = ""
+
+    # Text input'u session state'e bağlıyoruz
+    def update_search():
+        st.session_state.search_term = st.session_state.widget_search
+
+    search = st.text_input("🔍 İsim Ara (Aramanız silinmez)", 
+                           value=st.session_state.search_term, 
+                           key="widget_search", 
+                           on_change=update_search)
+    
+    # --- TABLOYU FİLTRELE ---
     cols = ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Egilim', 'Son_Guncelleyen'] if is_admin else ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum']
     
     if search:
         df_show = df[df['Ad_Soyad'].str.contains(search, case=False, na=False)]
     else:
-        df_show = df
-        
+        # Boşsa sadece ilk 10 kişiyi göster ki sayfa çok uzamasın (Performans için)
+        df_show = df.head(50) 
+        if not search:
+            st.caption("💡 Tüm liste yerine arama yaparak ilerlemeniz önerilir.")
+
+    # Tabloyu Göster
     event = st.dataframe(df_show[cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if len(event.selection.rows) > 0:
         idx = event.selection.rows[0]
         sicil = df_show.iloc[idx]['Sicil_No']
+        
+        # Gerçek indexi bul
         g_idx = df[df['Sicil_No'] == sicil].index[0]
         row_n = g_idx + 2
         kisi = df.iloc[g_idx]
@@ -236,11 +274,7 @@ elif menu == "📝 Veri Girişi":
             
             c1, c2 = st.columns(2)
             with c1:
-                opts_kurum = [
-                    "", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", 
-                    "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", 
-                    "Yapsat", "Çevre Şehircilik", "Emekli", "Diğer"
-                ]
+                opts_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Çevre Şehircilik", "Emekli", "Diğer"]
                 curr_k = kisi.get('Kurum', "") 
                 n_kurum = st.selectbox("Kurum", opts_kurum, index=opts_kurum.index(curr_k) if curr_k in opts_kurum else 0)
 
@@ -286,6 +320,10 @@ elif menu == "📝 Veri Girişi":
                         now = datetime.now().strftime("%Y-%m-%d %H:%M")
                         log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
                         ws_log.append_row(log_data)
-                    st.success("Kaydedildi!")
+                    
+                    # Sayfa zıplamasını engellemek için sessiz bildirim
+                    st.toast("✅ Başarıyla Kaydedildi!", icon="💾")
+                    time.sleep(1) # Kısa bir bekleme
+                    
                 except Exception as e:
                     st.error(f"Hata: {e}")
