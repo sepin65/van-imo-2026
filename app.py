@@ -4,14 +4,13 @@ import gspread
 import plotly.express as px
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-import pytz
 
-# --- SAYFA AYARLARI (DÜZELTİLDİ: MOBİL İÇİN MENÜ KAPALI BAŞLAR) ---
+# --- SAYFA AYARLARI (MENÜ KAPALI BAŞLAR - MOBİL UYUMLU) ---
 st.set_page_config(
     page_title="İMO Van 2026", 
     layout="wide", 
     page_icon="🏗️",
-    initial_sidebar_state="collapsed" # Telefondan girenler için menüyü gizle
+    initial_sidebar_state="collapsed"
 )
 
 # --- 1. BAĞLANTIYI KUR ---
@@ -46,16 +45,16 @@ def get_data():
     except Exception as e:
         return None, None, None, None
 
-# --- SAYAÇ HESAPLAMA ---
+# --- BASİT SAYAÇ (EKSTRA KURULUM GEREKTİRMEZ) ---
 def get_countdown():
     try:
-        tz = pytz.timezone('Turkey')
-        target_date = datetime(2026, 2, 14, 8, 0, 0, tzinfo=tz)
-        now = datetime.now(tz)
+        # Hedef: 14 Şubat 2026
+        target_date = datetime(2026, 2, 14)
+        now = datetime.now()
         remaining = target_date - now
         return remaining.days
     except:
-        return 400 # Hata olursa varsayılan değer
+        return 400
 
 # --- 3. GİRİŞ EKRANI ---
 if 'user' not in st.session_state:
@@ -64,9 +63,8 @@ if 'user' not in st.session_state:
 if st.session_state.user is None:
     st.title("🏗️ İMO SEÇİM SİSTEMİ")
     
-    # Giriş ekranında sayacı göster (Menüyü açmaya gerek kalmasın)
     gun = get_countdown()
-    st.info(f"⏳ SEÇİME **{gun}** GÜN KALDI! HEDEF 14 ŞUBAT 2026")
+    st.info(f"⏳ SEÇİME **{gun}** GÜN KALDI!")
     
     with st.form("giris_formu"):
         kadi = st.text_input("Kullanıcı Adı")
@@ -91,7 +89,7 @@ if st.session_state.user is None:
 # --- 4. ANA PROGRAM ---
 user = st.session_state.user
 
-# Sol Menü (Sayaç Burada)
+# Sol Menü
 gun = get_countdown()
 st.sidebar.markdown(
     f"""
@@ -112,14 +110,14 @@ if df is None:
     st.error("Veri alınamadı. Sayfayı yenileyin.")
     st.stop()
 
-# Menü Yapılandırması
+# Menü
 if user['Rol'] == 'ADMIN':
     menu = st.sidebar.radio("Menü", ["📊 360° STRATEJİK ANALİZ", "📝 Veri Girişi"])
 else:
     menu = st.sidebar.radio("Menü", ["📝 Veri Girişi"])
 
 # =========================================================
-# EKRAN 1: 360 DERECE STRATEJİK ANALİZ (SADECE ADMIN)
+# EKRAN 1: ANALİZ (ADMIN)
 # =========================================================
 if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
     st.title(f"📊 Komuta Masası")
@@ -129,7 +127,6 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
     bizimkiler = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     kararsizlar = temas[temas['Egilim'].isin(["Kararsızım", "Kısmen Yazar"])]
     
-    # Sicil Int
     def clean_sicil(x):
         try:
             return int(str(x).replace(".", ""))
@@ -138,7 +135,6 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
     analiz_df = temas.copy()
     analiz_df['Sicil_Int'] = analiz_df['Sicil_No'].apply(clean_sicil)
 
-    # Özet Kartlar
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Toplam Üye", toplam)
     c2.metric("Ulaşılan", len(temas), f"%{int(len(temas)/toplam*100) if toplam else 0}")
@@ -149,9 +145,8 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
 
     tabs = st.tabs(["🎯 HEDEF LİSTESİ", "🌍 Genel Durum", "🏗️ Kuşak Analizi", "🏢 Kurumlar", "⚡ Ekip Ligi"])
 
-    # 1. HEDEF LİSTESİ
     with tabs[0]:
-        st.subheader("🎯 Fırsat Listesi (Kararsızlar)")
+        st.subheader("🎯 Fırsat Listesi")
         if not kararsizlar.empty:
             h_list = kararsizlar[['Sicil_No', 'Ad_Soyad', 'Kurum', 'Referans', 'Temas_Durumu']].copy()
             st.dataframe(h_list, use_container_width=True, hide_index=True)
@@ -159,7 +154,6 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
         else:
             st.success("Kararsız üye yok.")
 
-    # 2. GENEL DURUM
     with tabs[1]:
         c_pie, c_bar = st.columns(2)
         with c_pie:
@@ -172,7 +166,6 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
                     fig_s = px.histogram(gecis, x="Gecmis_2024", color="Egilim", barmode="group", title="Sadakat Analizi")
                     st.plotly_chart(fig_s, use_container_width=True)
 
-    # 3. KUŞAK ANALİZİ
     with tabs[2]:
         bins = [0, 15000, 25000, 35000, 100000]
         labels = ['Eski Toprak', 'Kıdemli', 'Orta Kuşak', 'Genç']
@@ -187,7 +180,6 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
         with c_k2:
             st.dataframe(pd.crosstab(analiz_df['Kusak'], analiz_df['Egilim']), use_container_width=True)
 
-    # 4. KURUMLAR
     with tabs[3]:
         k_genel = analiz_df['Kurum'].value_counts().reset_index()
         k_genel.columns = ['Kurum', 'Top']
@@ -199,7 +191,6 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
         fig_ku = px.bar(m, x='Kurum', y='Oran', text='Biz', color='Oran', title="Kurum Başarısı (%)")
         st.plotly_chart(fig_ku, use_container_width=True)
 
-    # 5. EKİP LİGİ
     with tabs[4]:
         if not df_log.empty:
             perf = df_log['Kullanici'].value_counts().reset_index()
@@ -208,7 +199,7 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
             st.dataframe(df_log.tail(10).sort_index(ascending=False), use_container_width=True)
 
 # =========================================================
-# EKRAN 2: SEÇMEN KARTI (KÖR GİRİŞ)
+# EKRAN 2: SEÇMEN KARTI
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
@@ -220,7 +211,6 @@ elif menu == "📝 Veri Girişi":
         st.info("SAHA MODU (Gizli Giriş)")
 
     search = st.text_input("🔍 İsim Ara", placeholder="Ad Soyad...")
-    
     cols = ['Sicil_No', 'Ad_Soyad', 'Kurum', 'Egilim', 'Son_Guncelleyen'] if is_admin else ['Sicil_No', 'Ad_Soyad', 'Kurum']
     
     if search:
@@ -291,7 +281,7 @@ elif menu == "📝 Veri Girişi":
                                 ws.update_cell(row_n, headers.index(col)+1, val)
                         
                         if ws_log:
-                            now = datetime.now(pytz.timezone('Turkey')).strftime("%Y-%m-%d %H:%M")
+                            now = datetime.now().strftime("%Y-%m-%d %H:%M")
                             log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
                             ws_log.append_row(log_data)
                             
