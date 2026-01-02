@@ -34,7 +34,7 @@ if 'user' not in st.session_state:
     st.session_state.user = None
 
 if st.session_state.user is None:
-    st.title("🏗️ İMO VAN 2026 - SEÇİM SİSTEMİ")
+    st.title("🏗️ İMO VAN 2026 - GİRİŞ")
     with st.form("giris"):
         kadi = st.text_input("Kullanıcı Adı")
         sifre = st.text_input("Şifre", type="password")
@@ -70,73 +70,18 @@ if df.empty:
     st.warning("Veri bulunamadı.")
     st.stop()
 
-# NOT: Temsilcilik sütunu henüz boş olduğu için kısıtlamayı şimdilik kapattık.
-# Herkes listeyi görebilir. İleride açabiliriz.
+# --- DİKKAT: TEMSİLCİLİK FİLTRESİ KAPALI ---
+# Şu an Temsilcilik sütunu boş olduğu için herkes tüm listeyi görecek.
+# İleride açmak istersen alttaki 2 satırın başındaki # işaretini kaldır.
 # if user['Rol'] == 'SAHA' and user['Bolge_Yetkisi'] != 'Tümü':
 #     df = df[df['Temsilcilik'] == user['Bolge_Yetkisi']]
 
-menu = st.sidebar.radio("Menü", ["📊 Genel Durum (Analiz)", "📝 Seçmen Listesi & Giriş"])
+menu = st.sidebar.radio("Menü", ["📝 Seçmen Listesi & Giriş", "📊 Genel Durum (Analiz)"])
 
-# --- 1. ANALİZ EKRANI (Adminler İçin Özet) ---
-if menu == "📊 Genel Durum (Analiz)":
-    st.title("📊 Seçim Komuta Merkezi")
-    
-    # Rakamlar
-    toplam = len(df)
-    # Eğilim sütunu boş olmayanlar (Veri girilmiş kişiler)
-    ulasilan = len(df[df['Egilim'].str.len() > 1])
-    
-    # Bizimkiler (Tüm Listemizi Yazar + Büyük Kısmı Yazar)
-    bizimkiler = len(df[df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])])
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Toplam Seçmen", toplam)
-    c2.metric("Veri Girilen", ulasilan, f"%{int(ulasilan/toplam*100) if toplam else 0}")
-    c3.metric("🎯 Potansiyel Oyumuz", bizimkiler)
-    
-    st.divider()
-
-    if ulasilan > 0:
-        tab1, tab2, tab3 = st.tabs(["Genel Dağılım", "Kurum Analizi", "Lojistik/Ulaşım"])
-        
-        with tab1:
-            st.subheader("Üyelerin Eğilimi")
-            fig_pie = px.pie(df[df['Egilim'].str.len() > 1], names='Egilim', title='Oy Tercih Dağılımı', hole=0.4)
-            st.plotly_chart(fig_pie, use_container_width=True)
-            
-            st.subheader("2024 vs 2026 Geçiş Analizi")
-            # Sadece 2024 ve Egilim dolu olanları al
-            df_gecis = df[(df['Gecmis_2024'].str.len() > 1) & (df['Egilim'].str.len() > 1)]
-            if not df_gecis.empty:
-                fig_bar = px.bar(df_gecis, x="Gecmis_2024", color="Egilim", title="2024 Tercihine Göre Şimdiki Durum")
-                st.plotly_chart(fig_bar, use_container_width=True)
-        
-        with tab2:
-            st.subheader("Kurumlara Göre Bizim Durum")
-            # Sadece bizimkilere bakalım
-            df_bizim = df[df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
-            if not df_bizim.empty:
-                fig_kurum = px.bar(df_bizim, x='Kurum', title="Bize Oy Vereceklerin Kurum Dağılımı")
-                st.plotly_chart(fig_kurum, use_container_width=True)
-            else:
-                st.info("Henüz yeterli veri oluşmadı.")
-
-        with tab3:
-            st.subheader("Seçim Günü Ulaşım İhtiyacı")
-            ulasim_counts = df['Ulasim'].value_counts().reset_index()
-            ulasim_counts.columns = ['Durum', 'Kişi Sayısı']
-            # Boşları filtrele
-            ulasim_counts = ulasim_counts[ulasim_counts['Durum'].str.len() > 1]
-            fig_ulasim = px.bar(ulasim_counts, x='Durum', y='Kişi Sayısı', color='Durum')
-            st.plotly_chart(fig_ulasim, use_container_width=True)
-
-    else:
-        st.info("Henüz saha ekibi veri girişine başlamadı.")
-
-# --- 2. VERİ GİRİŞ EKRANI (Mazlum ve Ekip İçin) ---
-elif menu == "📝 Seçmen Listesi & Giriş":
+# --- 1. VERİ GİRİŞ EKRANI (MAZLUM VE EKİP İÇİN) ---
+if menu == "📝 Seçmen Listesi & Giriş":
     st.header("📝 Seçmen Bilgi Kartı")
-    st.info("👇 Listeden isme tıklayın, bilgileri doldurup 'Kaydet'e basın.")
+    st.caption("👇 Listeden isme tıklayın, bilgileri doldurup 'Kaydet'e basın.")
 
     # Arama Kutusu
     filter_text = st.text_input("🔍 İsim Ara (Filtrele)")
@@ -148,7 +93,7 @@ elif menu == "📝 Seçmen Listesi & Giriş":
     if filter_text:
         df_show = df[df['Ad_Soyad'].str.contains(filter_text, case=False, na=False)]
     else:
-        df_show = df
+        df_show = df # Arama yoksa TÜM LİSTEYİ göster
 
     # Tıklanabilir Tablo
     event = st.dataframe(
@@ -178,7 +123,7 @@ elif menu == "📝 Seçmen Listesi & Giriş":
             
             with col1:
                 st.markdown("##### 🏢 Kurum ve Geçmiş")
-                # KURUM LİSTESİ (Resimden)
+                # KURUM LİSTESİ (Senin Resimdekiyle Aynı)
                 opt_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Diğer"]
                 curr_kurum = kisi['Kurum']
                 idx_kurum = opt_kurum.index(curr_kurum) if curr_kurum in opt_kurum else 0
@@ -216,17 +161,17 @@ elif menu == "📝 Seçmen Listesi & Giriş":
                 idx_ulasim = opt_ulasim.index(curr_ulasim) if curr_ulasim in opt_ulasim else 0
                 yeni_ulasim = st.selectbox("Ulaşım İhtiyacı", opt_ulasim, index=idx_ulasim)
 
-            # Notlar Kısmı (Geniş)
+            # Notlar Kısmı
             st.markdown("##### 📝 Notlar")
             c_not1, c_not2 = st.columns(2)
-            yeni_referans = c_not1.text_input("Referans (Kim ilgileniyor?)", value=kisi['Referans'])
-            yeni_cizik = c_not2.text_input("Çizikler / Rakip Ekleme", value=kisi['Cizikler']) # Cizikler sütununu kullanıyoruz notlar için
+            yeni_referans = c_not1.text_input("Referans (Kim ilgileniyor?)", value=str(kisi['Referans']))
+            yeni_cizik = c_not2.text_input("Çizikler / Rakip Ekleme", value=str(kisi['Cizikler']))
 
             kaydet_btn = st.form_submit_button("✅ BİLGİLERİ KAYDET")
 
             if kaydet_btn:
                 try:
-                    # Sütun İsimlerine Göre Güncelleme (Hata Riskini Sıfırlar)
+                    # Sütun İsimlerine Göre Güncelleme
                     headers = df.columns.tolist()
                     
                     updates = [
@@ -238,7 +183,7 @@ elif menu == "📝 Seçmen Listesi & Giriş":
                         ("Ulasim", yeni_ulasim),
                         ("Referans", yeni_referans),
                         ("Cizikler", yeni_cizik),
-                        ("Son_Guncelleyen", user['Kullanici_Adi']) # Veriyi giren kişi
+                        ("Son_Guncelleyen", user['Kullanici_Adi'])
                     ]
                     
                     for col_name, value in updates:
@@ -247,7 +192,57 @@ elif menu == "📝 Seçmen Listesi & Giriş":
                             ws.update_cell(row_num, col_idx, value)
                     
                     st.success(f"{kisi['Ad_Soyad']} başarıyla güncellendi!")
-                    # Anında ekranı yenilemek için boşluk bırakma, direkt rerun yap
+                    # İşlem bitince hemen yenileme yapmıyoruz, form kapanmasın diye.
+                    # İstersen st.rerun() ekleyebiliriz ama yeşil yazıyı görmek iyidir.
                     
                 except Exception as e:
                     st.error(f"Hata oluştu: {e}")
+
+# --- 2. ANALİZ EKRANI (ADMİNLER İÇİN) ---
+elif menu == "📊 Genel Durum (Analiz)":
+    st.title("📊 Seçim Komuta Merkezi")
+    
+    # Rakamlar
+    toplam = len(df)
+    ulasilan = len(df[df['Egilim'].str.len() > 1])
+    
+    # Bizimkiler (Tüm Listemizi Yazar + Büyük Kısmı Yazar)
+    bizimkiler = len(df[df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Toplam Seçmen", toplam)
+    c2.metric("Veri Girilen", ulasilan, f"%{int(ulasilan/toplam*100) if toplam else 0}")
+    c3.metric("🎯 Potansiyel Oyumuz", bizimkiler)
+    
+    st.divider()
+
+    if ulasilan > 0:
+        tab1, tab2, tab3 = st.tabs(["Genel Dağılım", "Kurum Analizi", "Lojistik/Ulaşım"])
+        
+        with tab1:
+            st.subheader("Üyelerin Eğilimi")
+            fig_pie = px.pie(df[df['Egilim'].str.len() > 1], names='Egilim', title='Oy Tercih Dağılımı', hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
+            
+            st.subheader("2024 vs 2026 Geçiş Analizi")
+            df_gecis = df[(df['Gecmis_2024'].str.len() > 1) & (df['Egilim'].str.len() > 1)]
+            if not df_gecis.empty:
+                fig_bar = px.bar(df_gecis, x="Gecmis_2024", color="Egilim", title="2024 Tercihine Göre Şimdiki Durum")
+                st.plotly_chart(fig_bar, use_container_width=True)
+        
+        with tab2:
+            st.subheader("Kurumlara Göre Bizim Durum")
+            df_bizim = df[df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
+            if not df_bizim.empty:
+                fig_kurum = px.bar(df_bizim, x='Kurum', title="Bize Oy Vereceklerin Kurum Dağılımı")
+                st.plotly_chart(fig_kurum, use_container_width=True)
+
+        with tab3:
+            st.subheader("Seçim Günü Ulaşım İhtiyacı")
+            ulasim_counts = df['Ulasim'].value_counts().reset_index()
+            ulasim_counts.columns = ['Durum', 'Kişi Sayısı']
+            ulasim_counts = ulasim_counts[ulasim_counts['Durum'].str.len() > 1]
+            fig_ulasim = px.bar(ulasim_counts, x='Durum', y='Kişi Sayısı', color='Durum')
+            st.plotly_chart(fig_ulasim, use_container_width=True)
+    else:
+        st.info("Henüz saha ekibi veri girişine başlamadı.")
