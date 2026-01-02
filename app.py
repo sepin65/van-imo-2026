@@ -6,12 +6,12 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import pytz
 
-# --- SAYFA AYARLARI ---
+# --- SAYFA AYARLARI (DÜZELTİLDİ: MOBİL İÇİN MENÜ KAPALI BAŞLAR) ---
 st.set_page_config(
     page_title="İMO Van 2026", 
     layout="wide", 
     page_icon="🏗️",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed" # Telefondan girenler için menüyü gizle
 )
 
 # --- 1. BAĞLANTIYI KUR ---
@@ -46,13 +46,16 @@ def get_data():
     except Exception as e:
         return None, None, None, None
 
-# --- SAYAÇ HESAPLAMA FONKSİYONU ---
+# --- SAYAÇ HESAPLAMA ---
 def get_countdown():
-    tz = pytz.timezone('Turkey')
-    target_date = datetime(2026, 2, 14, 8, 0, 0, tzinfo=tz) # Seçim sabahı 08:00
-    now = datetime.now(tz)
-    remaining = target_date - now
-    return remaining.days
+    try:
+        tz = pytz.timezone('Turkey')
+        target_date = datetime(2026, 2, 14, 8, 0, 0, tzinfo=tz)
+        now = datetime.now(tz)
+        remaining = target_date - now
+        return remaining.days
+    except:
+        return 400 # Hata olursa varsayılan değer
 
 # --- 3. GİRİŞ EKRANI ---
 if 'user' not in st.session_state:
@@ -61,9 +64,9 @@ if 'user' not in st.session_state:
 if st.session_state.user is None:
     st.title("🏗️ İMO SEÇİM SİSTEMİ")
     
-    # Giriş ekranında da sayaç olsun, motivasyon olsun :)
-    kalan_gun = get_countdown()
-    st.info(f"⏳ BÜYÜK SEÇİME **{kalan_gun}** GÜN KALDI!")
+    # Giriş ekranında sayacı göster (Menüyü açmaya gerek kalmasın)
+    gun = get_countdown()
+    st.info(f"⏳ SEÇİME **{gun}** GÜN KALDI! HEDEF 14 ŞUBAT 2026")
     
     with st.form("giris_formu"):
         kadi = st.text_input("Kullanıcı Adı")
@@ -88,19 +91,17 @@ if st.session_state.user is None:
 # --- 4. ANA PROGRAM ---
 user = st.session_state.user
 
-# --- SOL MENÜ (SAYAÇLI) ---
-kalan_gun = get_countdown()
+# Sol Menü (Sayaç Burada)
+gun = get_countdown()
 st.sidebar.markdown(
     f"""
     <div style="background-color:#d32f2f;padding:10px;border-radius:5px;text-align:center;color:white;margin-bottom:10px;">
-        <h3 style="margin:0;color:white;">⏳ {kalan_gun} GÜN</h3>
-        <small>SEÇİME KALAN</small>
+        <h3 style="margin:0;color:white;">⏳ {gun} GÜN</h3>
     </div>
-    """, 
-    unsafe_allow_html=True
+    """, unsafe_allow_html=True
 )
-
 st.sidebar.markdown(f"### 👤 {user['Kullanici_Adi']}")
+
 if st.sidebar.button("Çıkış Yap"):
     st.session_state.user = None
     st.rerun()
@@ -121,15 +122,14 @@ else:
 # EKRAN 1: 360 DERECE STRATEJİK ANALİZ (SADECE ADMIN)
 # =========================================================
 if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
-    st.title(f"📊 Seçim Komuta Masası (Kalan: {kalan_gun} Gün)")
+    st.title(f"📊 Komuta Masası")
     
-    # Veri Hazırlığı
     toplam = len(df)
     temas = df[df['Egilim'].str.len() > 1]
     bizimkiler = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     kararsizlar = temas[temas['Egilim'].isin(["Kararsızım", "Kısmen Yazar"])]
     
-    # Sicil Dönüşüm
+    # Sicil Int
     def clean_sicil(x):
         try:
             return int(str(x).replace(".", ""))
@@ -147,26 +147,17 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
 
     st.divider()
 
-    # Sekmeler
     tabs = st.tabs(["🎯 HEDEF LİSTESİ", "🌍 Genel Durum", "🏗️ Kuşak Analizi", "🏢 Kurumlar", "⚡ Ekip Ligi"])
 
-    # 1. AKILLI HEDEF LİSTESİ
+    # 1. HEDEF LİSTESİ
     with tabs[0]:
-        st.subheader("🎯 Kazanılacak Potansiyel Seçmenler")
-        st.info("Bu liste, 'Kararsız' veya 'Kısmen Yazar' diyenleri listeler. İndirip ekibe dağıtabilirsin.")
-        
+        st.subheader("🎯 Fırsat Listesi (Kararsızlar)")
         if not kararsizlar.empty:
-            hedef_liste = kararsizlar[['Sicil_No', 'Ad_Soyad', 'Kurum', 'Referans', 'Temas_Durumu']].copy()
-            st.dataframe(hedef_liste, use_container_width=True, hide_index=True)
-            
-            st.download_button(
-                label="📥 Listeyi İndir (Excel)",
-                data=hedef_liste.to_csv(index=False).encode('utf-8'),
-                file_name='aranacak_kararsizlar.csv',
-                mime='text/csv'
-            )
+            h_list = kararsizlar[['Sicil_No', 'Ad_Soyad', 'Kurum', 'Referans', 'Temas_Durumu']].copy()
+            st.dataframe(h_list, use_container_width=True, hide_index=True)
+            st.download_button("📥 İndir", h_list.to_csv(index=False).encode('utf-8'), 'kararsizlar.csv', 'text/csv')
         else:
-            st.success("Harika! Sistemde kayıtlı 'Kararsız' üye yok.")
+            st.success("Kararsız üye yok.")
 
     # 2. GENEL DURUM
     with tabs[1]:
@@ -184,30 +175,29 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
     # 3. KUŞAK ANALİZİ
     with tabs[2]:
         bins = [0, 15000, 25000, 35000, 100000]
-        labels = ['Eski Toprak (0-15k)', 'Kıdemli (15k-25k)', 'Orta Kuşak (25k-35k)', 'Genç (35k+)']
+        labels = ['Eski Toprak', 'Kıdemli', 'Orta Kuşak', 'Genç']
         analiz_df['Kusak'] = pd.cut(analiz_df['Sicil_Int'], bins=bins, labels=labels)
         
-        col_k1, col_k2 = st.columns(2)
-        with col_k1:
-            bizim_kusak = analiz_df[analiz_df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
-            if not bizim_kusak.empty:
-                fig_k = px.bar(bizim_kusak['Kusak'].value_counts().reset_index(), x='Kusak', y='count', title="Kemik Oylarımızın Yaş Dağılımı", color='Kusak')
+        c_k1, c_k2 = st.columns(2)
+        with c_k1:
+            bizim_k = analiz_df[analiz_df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
+            if not bizim_k.empty:
+                fig_k = px.bar(bizim_k['Kusak'].value_counts().reset_index(), x='Kusak', y='count', title="Kemik Oyların Yaşı", color='Kusak')
                 st.plotly_chart(fig_k, use_container_width=True)
-        with col_k2:
+        with c_k2:
             st.dataframe(pd.crosstab(analiz_df['Kusak'], analiz_df['Egilim']), use_container_width=True)
 
     # 4. KURUMLAR
     with tabs[3]:
-        kurum_genel = analiz_df['Kurum'].value_counts().reset_index()
-        kurum_genel.columns = ['Kurum', 'Toplam']
-        kurum_bizim = bizimkiler['Kurum'].value_counts().reset_index()
-        kurum_bizim.columns = ['Kurum', 'Bizim']
-        merged = pd.merge(kurum_genel, kurum_bizim, on='Kurum', how='left').fillna(0)
-        merged = merged[merged['Toplam'] > 0]
-        merged['Oran'] = (merged['Bizim'] / merged['Toplam'] * 100).astype(int)
-        
-        fig_kurum = px.bar(merged, x='Kurum', y='Oran', text='Bizim', color='Oran', title="Kurum Bazlı Hakimiyet (%)")
-        st.plotly_chart(fig_kurum, use_container_width=True)
+        k_genel = analiz_df['Kurum'].value_counts().reset_index()
+        k_genel.columns = ['Kurum', 'Top']
+        k_bizim = bizimkiler['Kurum'].value_counts().reset_index()
+        k_bizim.columns = ['Kurum', 'Biz']
+        m = pd.merge(k_genel, k_bizim, on='Kurum', how='left').fillna(0)
+        m = m[m['Top'] > 0]
+        m['Oran'] = (m['Biz'] / m['Top'] * 100).astype(int)
+        fig_ku = px.bar(m, x='Kurum', y='Oran', text='Biz', color='Oran', title="Kurum Başarısı (%)")
+        st.plotly_chart(fig_ku, use_container_width=True)
 
     # 5. EKİP LİGİ
     with tabs[4]:
@@ -215,26 +205,22 @@ if menu == "📊 360° STRATEJİK ANALİZ" and user['Rol'] == 'ADMIN':
             perf = df_log['Kullanici'].value_counts().reset_index()
             perf.columns = ['Saha Elemanı', 'Veri Sayısı']
             st.bar_chart(perf.set_index('Saha Elemanı'))
-            st.caption("Son Veri Girişleri:")
             st.dataframe(df_log.tail(10).sort_index(ascending=False), use_container_width=True)
 
 # =========================================================
-# EKRAN 2: SEÇMEN KARTI (KÖR GİRİŞ AKTİF)
+# EKRAN 2: SEÇMEN KARTI (KÖR GİRİŞ)
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
     
-    # YETKİ KONTROLÜ
     is_admin = (user['Rol'] == 'ADMIN')
-    
     if is_admin:
-        st.success("YETKİLİ: Tüm veriler açık.")
+        st.success("YETKİLİ MODU")
     else:
-        st.info("SAHA MODU: Gizli giriş aktif.")
+        st.info("SAHA MODU (Gizli Giriş)")
 
     search = st.text_input("🔍 İsim Ara", placeholder="Ad Soyad...")
     
-    # Liste Görünümü
     cols = ['Sicil_No', 'Ad_Soyad', 'Kurum', 'Egilim', 'Son_Guncelleyen'] if is_admin else ['Sicil_No', 'Ad_Soyad', 'Kurum']
     
     if search:
@@ -258,16 +244,13 @@ elif menu == "📝 Veri Girişi":
             st.markdown(f"### ✏️ **{kisi['Ad_Soyad']}**")
             with st.form("entry_form"):
                 
-                # --- Kör Giriş Fonksiyonu ---
                 def get(f): return kisi.get(f, "") if is_admin else ""
                 
-                # 1. Satır
                 c1, c2 = st.columns(2)
                 with c1:
                     opts_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Diğer"]
                     curr_k = kisi.get('Kurum', "") 
-                    idx_k = opts_kurum.index(curr_k) if curr_k in opts_kurum else 0
-                    n_kurum = st.selectbox("Kurum", opts_kurum, index=idx_k)
+                    n_kurum = st.selectbox("Kurum", opts_kurum, index=opts_kurum.index(curr_k) if curr_k in opts_kurum else 0)
 
                     opts_24 = ["", "Sarı Liste", "Mavi Liste"]
                     curr_24 = get('Gecmis_2024')
@@ -303,19 +286,13 @@ elif menu == "📝 Veri Girişi":
                             ("Cizikler", n_not), ("Rakip_Ekleme", n_rakip), ("Referans", n_ref),
                             ("Son_Guncelleyen", user['Kullanici_Adi'])
                         ]
-                        
-                        # Excel Update
                         for col, val in updates:
                             if col in headers:
                                 ws.update_cell(row_n, headers.index(col)+1, val)
                         
-                        # Log Update
                         if ws_log:
                             now = datetime.now(pytz.timezone('Turkey')).strftime("%Y-%m-%d %H:%M")
-                            log_data = [
-                                now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'],
-                                n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not
-                            ]
+                            log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
                             ws_log.append_row(log_data)
                             
                         st.success("Kaydedildi!")
@@ -333,7 +310,5 @@ elif menu == "📝 Veri Girişi":
                             e_txt = r['Egilim'] if 'Egilim' in r else '-'
                             st.markdown(f"**{e_txt}**")
                             st.divider()
-                    else:
-                        st.write("-")
             else:
                 st.caption("🔒 Geçmiş Gizli")
