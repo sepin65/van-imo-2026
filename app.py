@@ -6,6 +6,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Sayfa Ayarları
 st.set_page_config(page_title="İMO Van 2026", layout="wide", page_icon="🏗️")
 
+# --- VERSİYON KONTROLÜ (Bunu görüyorsan kod günceldir) ---
+st.success("✅ SİSTEM GÜNCELLENDİ: Hata Korumalı Yeni Versiyon (V3.0)")
+
 # --- 1. BAĞLANTIYI KUR ---
 @st.cache_resource
 def get_connection():
@@ -24,11 +27,10 @@ def get_data():
         data = ws.get_all_records()
         df = pd.DataFrame(data)
         
-        # Sütun İsimlerindeki Boşlukları Temizle (HAYAT KURTARAN HAMLE)
-        # "Cizikler " şeklindeki hatalı başlıkları "Cizikler" yapar.
+        # Sütun İsimlerindeki Boşlukları Temizle (Kritik Hamle)
         df.columns = df.columns.str.strip()
         
-        # Tüm verileri yazıya çevir ki hata vermesin
+        # Tüm verileri yazıya çevir
         df = df.astype(str)
         return df, ws
     except Exception as e:
@@ -39,11 +41,11 @@ if 'user' not in st.session_state:
     st.session_state.user = None
 
 if st.session_state.user is None:
-    st.title("🏗️ İMO VAN 2026 - GÜVENLİ GİRİŞ")
+    st.title("🏗️ GÜVENLİ GİRİŞ")
     with st.form("giris_formu"):
         kadi = st.text_input("Kullanıcı Adı")
         sifre = st.text_input("Şifre", type="password")
-        # Submit butonu formun içinde olmalı!
+        # Submit butonu formun içinde!
         btn = st.form_submit_button("Giriş Yap")
         
         if btn:
@@ -54,7 +56,6 @@ if st.session_state.user is None:
                 users = ws_users.get_all_records()
                 df_users = pd.DataFrame(users)
                 
-                # Kullanıcı Doğrulama
                 login_user = df_users[df_users['Kullanici_Adi'] == kadi]
                 if not login_user.empty and str(login_user.iloc[0]['Sifre']) == sifre:
                     st.session_state.user = login_user.iloc[0].to_dict()
@@ -67,7 +68,7 @@ if st.session_state.user is None:
 
 # --- 4. ANA PROGRAM ---
 user = st.session_state.user
-st.sidebar.success(f"Aktif Kullanıcı: {user['Kullanici_Adi']}")
+st.sidebar.info(f"👤 {user['Kullanici_Adi']}")
 
 if st.sidebar.button("Çıkış Yap"):
     st.session_state.user = None
@@ -77,23 +78,25 @@ if st.sidebar.button("Çıkış Yap"):
 df, ws = get_data()
 
 if df is None:
-    st.error("⚠️ Excel dosyasına bağlanılamadı. Lütfen 'Van_IMO_Secim_2026' dosyasının adını ve 'secmenler' sayfasını kontrol et.")
+    st.error("⚠️ Excel bağlantı hatası. Lütfen sayfayı yenileyin.")
     st.stop()
 
 # --- MENÜ ---
-menu = st.sidebar.radio("Menü", ["📝 Seçmen Listesi & Güncelleme", "📊 Analiz Raporu"])
+menu = st.sidebar.radio("Menü", ["📝 Seçmen Listesi", "📊 Analiz Raporu"])
 
 # ==========================================
 # EKRAN 1: SEÇMEN LİSTESİ (LİSTE DİREKT AÇILIR)
 # ==========================================
-if menu == "📝 Seçmen Listesi & Güncelleme":
-    st.header("📋 Seçmen Yönetim Paneli")
+if menu == "📝 Seçmen Listesi":
+    st.header("📋 Seçmen Listesi")
     
-    # Arama Kutusu (İsteğe bağlı)
-    search_term = st.text_input("🔎 İsimle Hızlı Ara (Boş bırakırsan hepsi görünür)", placeholder="Örn: Ahmet")
+    # İstatistik Bilgisi
+    st.info(f"Toplam **{len(df)}** kayıt yüklendi. Aşağıdaki listeden isme tıklayıp düzenleyebilirsiniz.")
 
-    # Gösterilecek Sütunlar (Varsa gösterir, yoksa hata vermez)
-    # Excel'deki başlıkların tam olarak bunlar olduğundan emin olmaya çalışıyoruz
+    # Arama Kutusu
+    search_term = st.text_input("🔎 İsimle Hızlı Ara", placeholder="Örn: Ahmet")
+
+    # Sütun Kontrolü (Hata vermemesi için var olanları seçer)
     desired_columns = ['Sicil_No', 'Ad_Soyad', 'Kurum', 'Egilim', 'Son_Guncelleyen']
     available_columns = [col for col in desired_columns if col in df.columns]
 
@@ -104,8 +107,6 @@ if menu == "📝 Seçmen Listesi & Güncelleme":
         df_display = df
 
     # TABLOYU ÇİZ
-    st.write(f"Toplam **{len(df_display)}** kişi listeleniyor.")
-    
     event = st.dataframe(
         df_display[available_columns],
         use_container_width=True,
@@ -117,30 +118,25 @@ if menu == "📝 Seçmen Listesi & Güncelleme":
     # --- KİŞİ SEÇİLDİĞİNDE FORM AÇILSIN ---
     if len(event.selection.rows) > 0:
         selected_row_idx = event.selection.rows[0]
-        # Seçilen kişinin Sicil Numarasını al (Kaydırmayı önler)
         sicil_no = df_display.iloc[selected_row_idx]['Sicil_No']
         
-        # Ana listeden (df) o kişiyi bul
+        # Gerçek veriyi bul
         gercek_index = df[df['Sicil_No'] == sicil_no].index[0]
-        row_num = gercek_index + 2 # Excel satır numarası
+        row_num = gercek_index + 2
         kisi = df.iloc[gercek_index]
 
         st.divider()
-        st.markdown(f"### 👤 Düzenleniyor: **{kisi['Ad_Soyad']}**")
+        st.markdown(f"### ✏️ Düzenleniyor: **{kisi['Ad_Soyad']}**")
         
         # --- GÜNCELLEME FORMU ---
         with st.form("guncelleme_formu"):
             c1, c2 = st.columns(2)
             
-            # Not: .get() fonksiyonu, eğer Excel'de o sütun yoksa hata vermek yerine boş getirir.
-            # Bu sayede "KeyError" hatası ALMAZSIN.
-            
             with c1:
-                st.markdown("**🏢 Kurumsal Bilgiler**")
-                
+                st.markdown("##### 🏢 Kurum ve Geçmiş")
                 # Kurum
                 opt_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Diğer"]
-                curr_kurum = kisi.get('Kurum', "") # Hata önleyici .get()
+                curr_kurum = kisi.get('Kurum', "")
                 idx_kurum = opt_kurum.index(curr_kurum) if curr_kurum in opt_kurum else 0
                 yeni_kurum = st.selectbox("Kurum", opt_kurum, index=idx_kurum)
                 
@@ -160,15 +156,14 @@ if menu == "📝 Seçmen Listesi & Güncelleme":
                 yeni_referans = st.text_input("Referans / İlgilenen", value=kisi.get('Referans', ""))
 
             with c2:
-                st.markdown("**🗳️ 2026 Durumu & Lojistik**")
-                
+                st.markdown("##### 🗳️ 2026 Durumu")
                 # Eğilim
                 opt_egilim = ["", "Tüm Listemizi Yazar", "Büyük Kısmı Yazar", "Kısmen Yazar", "Karşı Tarafı Destekler", "Kararsızım"]
                 curr_egilim = kisi.get('Egilim', "")
                 idx_egilim = opt_egilim.index(curr_egilim) if curr_egilim in opt_egilim else 0
                 yeni_egilim = st.selectbox("2026 Eğilimi", opt_egilim, index=idx_egilim)
 
-                # Temas Durumu
+                # Temas
                 opt_temas = ["", "Kendim Görüştüm", "Arkadaşım/Akraba Aracılığı", "Tanımıyorum"]
                 curr_temas = kisi.get('Temas_Durumu', "")
                 idx_temas = opt_temas.index(curr_temas) if curr_temas in opt_temas else 0
@@ -180,6 +175,47 @@ if menu == "📝 Seçmen Listesi & Güncelleme":
                 idx_ulasim = opt_ulasim.index(curr_ulasim) if curr_ulasim in opt_ulasim else 0
                 yeni_ulasim = st.selectbox("Ulaşım İhtiyacı", opt_ulasim, index=idx_ulasim)
                 
-                # Çizikler / Notlar
+                # Çizik/Rakip
                 yeni_cizik = st.text_input("Çizikler / Notlar", value=kisi.get('Cizikler', ""))
-                y
+                yeni_rakip = st.text_input("Rakip Ekleme", value=kisi.get('Rakip_Ekleme', ""))
+
+            # KAYDET BUTONU
+            if st.form_submit_button("✅ BİLGİLERİ KAYDET"):
+                try:
+                    headers = df.columns.tolist()
+                    updates = [
+                        ("Kurum", yeni_kurum), ("Gecmis_2024", yeni_24), ("Gecmis_2022", yeni_22),
+                        ("Referans", yeni_referans), ("Egilim", yeni_egilim), ("Temas_Durumu", yeni_temas),
+                        ("Ulasim", yeni_ulasim), ("Cizikler", yeni_cizik), ("Rakip_Ekleme", yeni_rakip),
+                        ("Son_Guncelleyen", user['Kullanici_Adi'])
+                    ]
+                    
+                    for col_name, val in updates:
+                        if col_name in headers:
+                            ws.update_cell(row_num, headers.index(col_name) + 1, val)
+                    
+                    st.success(f"✅ {kisi['Ad_Soyad']} başarıyla güncellendi!")
+                except Exception as e:
+                    st.error(f"Hata: {e}")
+
+# ==========================================
+# EKRAN 2: ANALİZ
+# ==========================================
+elif menu == "📊 Analiz Raporu":
+    st.title("📊 Seçim Komuta Merkezi")
+    
+    toplam = len(df)
+    ulasilan = len(df[df['Egilim'].str.len() > 1]) if 'Egilim' in df.columns else 0
+    
+    c1, c2 = st.columns(2)
+    c1.metric("Toplam Üye", toplam)
+    c2.metric("Veri Girilen", ulasilan, f"%{int(ulasilan/toplam*100) if toplam else 0}")
+    
+    st.divider()
+    
+    if ulasilan > 0:
+        import plotly.express as px
+        fig = px.pie(df[df['Egilim'].str.len() > 1], names='Egilim', title='Genel Oy Dağılımı')
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Henüz veri girişi yok.")
