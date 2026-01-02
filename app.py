@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import gspread
 import plotly.express as px
-import plotly.graph_objects as go
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
@@ -24,7 +23,7 @@ def get_connection():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. VERİLERİ ÇEK VE İŞLE ---
+# --- 2. VERİLERİ ÇEK ---
 def get_data():
     client = get_connection()
     try:
@@ -108,7 +107,7 @@ if st.session_state.user is None:
                 st.error(f"Hata: {e}")
     st.stop()
 
-# --- 4. POP-UP FORM FONKSİYONU (YENİ) ---
+# --- 4. POP-UP FORM (SAYFAYI YENİLEMEZ) ---
 @st.dialog("✏️ SEÇMEN BİLGİSİ DÜZENLE")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log):
     st.markdown(f"**{kisi['Ad_Soyad']}** ({kisi.get('Sandik_No', '-')})")
@@ -148,7 +147,8 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log):
         n_rakip = st.text_input("Rakip Ekleme", value=get('Rakip_Ekleme'))
         n_ref = st.text_input("Referans", value=get('Referans'))
 
-        if st.form_submit_button("✅ KAYDET VE KAPAT"):
+        # BUTONA BASINCA SADECE KAYDET, YENİLEME YAPMA
+        if st.form_submit_button("✅ KAYDET"):
             try:
                 updates = [
                     ("Kurum", n_kurum), ("Gecmis_2024", n_24), ("Gecmis_2022", n_22),
@@ -167,14 +167,13 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log):
                     log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
                     ws_log.append_row(log_data)
                 
-                st.success("Kaydedildi!")
-                time.sleep(0.5)
-                st.rerun() # Pencereyi kapatır ve listeyi günceller
+                st.success("✅ Veri Excel'e işlendi! Pencereyi kapatabilirsiniz.")
+                # BURADAKİ st.rerun() KOMUTUNU KALDIRDIM. ARTIK BAŞA DÖNMEZ.
                 
             except Exception as e:
                 st.error(f"Hata: {e}")
 
-# --- 5. ANA EKRAN KODLARI ---
+# --- 5. ANA EKRAN ---
 user = st.session_state.user
 gun = get_countdown()
 st.sidebar.markdown(f"<div style='background-color:#d32f2f;padding:10px;border-radius:5px;text-align:center;color:white;'><h3>⏳ {gun} GÜN</h3></div>", unsafe_allow_html=True)
@@ -187,7 +186,7 @@ if st.sidebar.button("Çıkış Yap"):
 df, ws, df_log, ws_log = get_data()
 
 if df is None:
-    st.error("Veri alınırken hata oluştu. Sayfayı yenileyin.")
+    st.error("Veri alınırken hata oluştu.")
     st.stop()
 
 if user['Rol'] == 'ADMIN':
@@ -196,7 +195,7 @@ else:
     menu = st.sidebar.radio("Menü", ["📝 Veri Girişi"])
 
 # =========================================================
-# EKRAN 1: PROFESYONEL ANALİZ
+# ANALİZ
 # =========================================================
 if menu == "📊 PROFESYONEL ANALİZ" and user['Rol'] == 'ADMIN':
     st.title("📊 Stratejik Komuta Merkezi")
@@ -205,11 +204,10 @@ if menu == "📊 PROFESYONEL ANALİZ" and user['Rol'] == 'ADMIN':
     bizimkiler = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     kararsizlar = temas[temas['Egilim'].isin(["Kararsızım", "Kısmen Yazar"])]
 
-    # KPI
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Toplam Üye", len(df))
     c2.metric("Sahada Dokunulan", len(temas), f"%{int(len(temas)/len(df)*100) if len(df)>0 else 0}")
-    c3.metric("🟡 KEMİK OYUMUZ", len(bizimkiler))
+    c3.metric("🟡 KEMİK OY", len(bizimkiler))
     c4.metric("⚖️ POTANSİYEL", len(kararsizlar))
 
     st.divider()
@@ -221,10 +219,8 @@ if menu == "📊 PROFESYONEL ANALİZ" and user['Rol'] == 'ADMIN':
         if not df_log.empty and 'Zaman' in df_log.columns:
             df_log['Tarih'] = pd.to_datetime(df_log['Zaman']).dt.date
             daily_activity = df_log.groupby('Tarih').size().reset_index(name='İşlem Sayısı')
-            fig_trend = px.line(daily_activity, x='Tarih', y='İşlem Sayısı', markers=True, title="Günlük Saha Aktivitesi")
+            fig_trend = px.line(daily_activity, x='Tarih', y='İşlem Sayısı', markers=True, title="Günlük Aktivite")
             st.plotly_chart(fig_trend, use_container_width=True)
-        else:
-            st.warning("Veri yok.")
 
     with tabs[1]:
         st.subheader("🔥 Kurum - Eğilim Haritası")
@@ -259,7 +255,7 @@ if menu == "📊 PROFESYONEL ANALİZ" and user['Rol'] == 'ADMIN':
         st.plotly_chart(fig_ku, use_container_width=True)
 
 # =========================================================
-# EKRAN 2: VERİ GİRİŞİ (POP-UP AKTİF)
+# VERİ GİRİŞİ (LİMİT YOK - YENİLEME YOK)
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
@@ -287,7 +283,6 @@ elif menu == "📝 Veri Girişi":
     else:
         df_show = df 
 
-    # Tablo (Seçim Aktif)
     event = st.dataframe(
         df_show[cols], 
         use_container_width=True, 
@@ -296,7 +291,6 @@ elif menu == "📝 Veri Girişi":
         selection_mode="single-row"
     )
 
-    # SEÇİM YAPILINCA POP-UP AÇ
     if len(event.selection.rows) > 0:
         idx = event.selection.rows[0]
         sicil = df_show.iloc[idx]['Sicil_No']
@@ -305,5 +299,4 @@ elif menu == "📝 Veri Girişi":
         row_n = g_idx + 2
         kisi = df.iloc[g_idx]
         
-        # Pop-up Fonksiyonunu Çağır
         entry_form_dialog(kisi, row_n, sicil, user, df.columns.tolist(), ws, ws_log)
