@@ -22,8 +22,12 @@ def get_data():
         ws = sheet.worksheet("secmenler")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
-        # Tüm sütunları metin (string) formatına çevir ki hata vermesin
-        df = df.astype(str) 
+        
+        # Sütun isimlerindeki olası boşlukları temizle (Hata önleyici)
+        df.columns = df.columns.str.strip()
+        
+        # Tüm veriyi metne çevir (Hata önleyici)
+        df = df.astype(str)
         return df, ws
     except Exception as e:
         st.error(f"Excel Bağlantı Hatası: {e}")
@@ -59,129 +63,126 @@ if st.session_state.user is None:
 
 # --- ANA PROGRAM ---
 user = st.session_state.user
-st.sidebar.info(f"👤 {user['Kullanici_Adi']} | Görev: {user['Rol']}")
+st.sidebar.info(f"👤 {user['Kullanici_Adi']} | Yetki: {user['Rol']}")
 
 if st.sidebar.button("Çıkış"):
     st.session_state.user = None
     st.rerun()
 
 df, ws = get_data()
+
+# Eğer veri çekilemediyse dur
 if df.empty:
-    st.warning("Veri bulunamadı.")
+    st.warning("Veri bulunamadı veya sütun isimlerinde sorun var.")
     st.stop()
 
-# --- DİKKAT: TEMSİLCİLİK FİLTRESİ KAPALI ---
-# Şu an Temsilcilik sütunu boş olduğu için herkes tüm listeyi görecek.
-# İleride açmak istersen alttaki 2 satırın başındaki # işaretini kaldır.
-# if user['Rol'] == 'SAHA' and user['Bolge_Yetkisi'] != 'Tümü':
-#     df = df[df['Temsilcilik'] == user['Bolge_Yetkisi']]
+menu = st.sidebar.radio("Menü", ["📝 Seçmen Listesi (Tümü)", "📊 Genel Durum (Analiz)"])
 
-menu = st.sidebar.radio("Menü", ["📝 Seçmen Listesi & Giriş", "📊 Genel Durum (Analiz)"])
-
-# --- 1. VERİ GİRİŞ EKRANI (MAZLUM VE EKİP İÇİN) ---
-if menu == "📝 Seçmen Listesi & Giriş":
+# --- 1. VERİ GİRİŞ EKRANI (LİSTE DİREKT AÇILIR) ---
+if menu == "📝 Seçmen Listesi (Tümü)":
     st.header("📝 Seçmen Bilgi Kartı")
-    st.caption("👇 Listeden isme tıklayın, bilgileri doldurup 'Kaydet'e basın.")
+    st.caption("👇 Aşağıdaki listeden isme tıklayın, formu doldurun ve kaydedin.")
 
-    # Arama Kutusu
-    filter_text = st.text_input("🔍 İsim Ara (Filtrele)")
+    # İsteğe bağlı filtreleme kutusu (Arama zorunluluğu yok!)
+    filter_text = st.text_input("🔍 İsim Filtrele (İsteğe Bağlı)", placeholder="Listeyi daraltmak istersen buraya yaz...")
     
-    # Tabloda gösterilecek sütunlar
-    cols_show = ['Sicil_No', 'Ad_Soyad', 'Kurum', 'Egilim', 'Son_Guncelleyen']
+    # Tabloda gösterilecek ana sütunlar
+    cols_to_show = ['Sicil_No', 'Ad_Soyad', 'Kurum', 'Egilim', 'Son_Guncelleyen']
     
     # Filtreleme mantığı
     if filter_text:
         df_show = df[df['Ad_Soyad'].str.contains(filter_text, case=False, na=False)]
     else:
-        df_show = df # Arama yoksa TÜM LİSTEYİ göster
+        df_show = df  # Arama yoksa TÜM LİSTEYİ GÖSTER
 
     # Tıklanabilir Tablo
     event = st.dataframe(
-        df_show[cols_show], 
+        df_show[cols_to_show], 
         use_container_width=True,
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row"
     )
 
+    # LİSTEDEN BİRİ SEÇİLDİYSE FORM AÇILSIN
     if len(event.selection.rows) > 0:
         selected_row_idx = event.selection.rows[0]
-        # Filtrelenmiş listeden seçilen kişiyi bul
+        
+        # Seçilen kişinin Sicil Numarasını al
         sicil_no = df_show.iloc[selected_row_idx]['Sicil_No']
         
-        # Ana DataFrame'den o kişiyi çek
+        # Ana listeden (df) o kişiyi bul (Excel sırasını kaybetmemek için)
         gercek_index = df[df['Sicil_No'] == sicil_no].index[0]
-        row_num = gercek_index + 2 # Excel satır no
+        row_num = gercek_index + 2 # Excel satır numarası
         kisi = df.iloc[gercek_index]
 
         st.divider()
-        st.markdown(f"### 👷‍♂️ **{kisi['Ad_Soyad']}**")
-        st.caption(f"Sicil: {kisi['Sicil_No']} | Kayıtlı Bölge: {kisi['Dogum_Yeri']}")
+        st.markdown(f"### 👷‍♂️ **{kisi['Ad_Soyad']}** (Sicil: {kisi['Sicil_No']})")
 
+        # --- FORM BAŞLANGICI ---
         with st.form("veri_giris_formu", border=True):
             col1, col2 = st.columns(2)
             
             with col1:
                 st.markdown("##### 🏢 Kurum ve Geçmiş")
-                # KURUM LİSTESİ (Senin Resimdekiyle Aynı)
+                
+                # KURUM
                 opt_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Diğer"]
-                curr_kurum = kisi['Kurum']
+                curr_kurum = kisi.get('Kurum', "")
                 idx_kurum = opt_kurum.index(curr_kurum) if curr_kurum in opt_kurum else 0
                 yeni_kurum = st.selectbox("Kurum", opt_kurum, index=idx_kurum)
                 
-                # GEÇMİŞ 2024
+                # 2024 GEÇMİŞ
                 opt_24 = ["", "Sarı Liste", "Mavi Liste"]
-                curr_24 = kisi['Gecmis_2024']
+                curr_24 = kisi.get('Gecmis_2024', "")
                 idx_24 = opt_24.index(curr_24) if curr_24 in opt_24 else 0
                 yeni_24 = st.selectbox("2024 Tercihi", opt_24, index=idx_24)
 
-                # GEÇMİŞ 2022
+                # 2022 GEÇMİŞ
                 opt_22 = ["", "Sarı Liste", "Mavi Liste", "Beyaz Liste"]
-                curr_22 = kisi['Gecmis_2022']
+                curr_22 = kisi.get('Gecmis_2022', "")
                 idx_22 = opt_22.index(curr_22) if curr_22 in opt_22 else 0
                 yeni_22 = st.selectbox("2022 Tercihi", opt_22, index=idx_22)
 
+                # REFERANS
+                yeni_referans = st.text_input("Referans / İlgilenen", value=kisi.get('Referans', ""))
+
             with col2:
-                st.markdown("##### 🗳️ 2026 Durumu ve Ulaşım")
-                # EĞİLİM (Puanlama)
+                st.markdown("##### 🗳️ 2026 Durumu ve Detaylar")
+                
+                # EĞİLİM
                 opt_egilim = ["", "Tüm Listemizi Yazar", "Büyük Kısmı Yazar", "Kısmen Yazar", "Karşı Tarafı Destekler", "Kararsızım"]
-                curr_egilim = kisi['Egilim']
+                curr_egilim = kisi.get('Egilim', "")
                 idx_egilim = opt_egilim.index(curr_egilim) if curr_egilim in opt_egilim else 0
                 yeni_egilim = st.selectbox("2026 Eğilimi", opt_egilim, index=idx_egilim)
 
-                # TEMAS DURUMU
-                opt_temas = ["", "Kendim Görüştüm", "Arkadaşım/Akraba Aracılığı", "Tanımıyorum"]
-                curr_temas = kisi['Temas_Durumu']
-                idx_temas = opt_temas.index(curr_temas) if curr_temas in opt_temas else 0
-                yeni_temas = st.selectbox("Temas Durumu", opt_temas, index=idx_temas)
-
                 # ULAŞIM
-                opt_ulasim = ["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek", "Temsilcilikten Gelecek"]
-                curr_ulasim = kisi['Ulasim']
+                opt_ulasim = ["", "Kendi Gelir", "Araç Gerekir", "İlçeden Gelecek", "Temsilcilikten Gelecek"]
+                curr_ulasim = kisi.get('Ulasim', "")
                 idx_ulasim = opt_ulasim.index(curr_ulasim) if curr_ulasim in opt_ulasim else 0
                 yeni_ulasim = st.selectbox("Ulaşım İhtiyacı", opt_ulasim, index=idx_ulasim)
 
-            # Notlar Kısmı
-            st.markdown("##### 📝 Notlar")
-            c_not1, c_not2 = st.columns(2)
-            yeni_referans = c_not1.text_input("Referans (Kim ilgileniyor?)", value=str(kisi['Referans']))
-            yeni_cizik = c_not2.text_input("Çizikler / Rakip Ekleme", value=str(kisi['Cizikler']))
+                # RAKİP EKLEME
+                yeni_rakip = st.text_input("Rakip Ekleme (Varsa)", value=kisi.get('Rakip_Ekleme', ""))
+                
+                # ÇİZİKLER
+                yeni_cizik = st.text_input("Çizikler / Notlar", value=kisi.get('Cizikler', ""))
 
             kaydet_btn = st.form_submit_button("✅ BİLGİLERİ KAYDET")
 
             if kaydet_btn:
                 try:
-                    # Sütun İsimlerine Göre Güncelleme
                     headers = df.columns.tolist()
                     
+                    # Güncellenecek veriler (Excel Başlığı : Yeni Değer)
                     updates = [
                         ("Kurum", yeni_kurum),
                         ("Gecmis_2024", yeni_24),
                         ("Gecmis_2022", yeni_22),
-                        ("Egilim", yeni_egilim),
-                        ("Temas_Durumu", yeni_temas),
-                        ("Ulasim", yeni_ulasim),
                         ("Referans", yeni_referans),
+                        ("Egilim", yeni_egilim),
+                        ("Ulasim", yeni_ulasim),
+                        ("Rakip_Ekleme", yeni_rakip),
                         ("Cizikler", yeni_cizik),
                         ("Son_Guncelleyen", user['Kullanici_Adi'])
                     ]
@@ -191,22 +192,18 @@ if menu == "📝 Seçmen Listesi & Giriş":
                             col_idx = headers.index(col_name) + 1
                             ws.update_cell(row_num, col_idx, value)
                     
-                    st.success(f"{kisi['Ad_Soyad']} başarıyla güncellendi!")
-                    # İşlem bitince hemen yenileme yapmıyoruz, form kapanmasın diye.
-                    # İstersen st.rerun() ekleyebiliriz ama yeşil yazıyı görmek iyidir.
+                    st.success(f"✅ {kisi['Ad_Soyad']} güncellendi!")
                     
                 except Exception as e:
-                    st.error(f"Hata oluştu: {e}")
+                    st.error(f"Kayıt Hatası: {e}")
 
-# --- 2. ANALİZ EKRANI (ADMİNLER İÇİN) ---
+# --- 2. ANALİZ EKRANI ---
 elif menu == "📊 Genel Durum (Analiz)":
     st.title("📊 Seçim Komuta Merkezi")
     
-    # Rakamlar
     toplam = len(df)
+    # Eğilimi boş olmayanlar
     ulasilan = len(df[df['Egilim'].str.len() > 1])
-    
-    # Bizimkiler (Tüm Listemizi Yazar + Büyük Kısmı Yazar)
     bizimkiler = len(df[df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])])
 
     c1, c2, c3 = st.columns(3)
@@ -217,32 +214,16 @@ elif menu == "📊 Genel Durum (Analiz)":
     st.divider()
 
     if ulasilan > 0:
-        tab1, tab2, tab3 = st.tabs(["Genel Dağılım", "Kurum Analizi", "Lojistik/Ulaşım"])
+        tab1, tab2 = st.tabs(["Genel Dağılım", "Kurum Analizi"])
         
         with tab1:
-            st.subheader("Üyelerin Eğilimi")
-            fig_pie = px.pie(df[df['Egilim'].str.len() > 1], names='Egilim', title='Oy Tercih Dağılımı', hole=0.4)
+            fig_pie = px.pie(df[df['Egilim'].str.len() > 1], names='Egilim', title='Oy Tercih Dağılımı')
             st.plotly_chart(fig_pie, use_container_width=True)
             
-            st.subheader("2024 vs 2026 Geçiş Analizi")
-            df_gecis = df[(df['Gecmis_2024'].str.len() > 1) & (df['Egilim'].str.len() > 1)]
-            if not df_gecis.empty:
-                fig_bar = px.bar(df_gecis, x="Gecmis_2024", color="Egilim", title="2024 Tercihine Göre Şimdiki Durum")
-                st.plotly_chart(fig_bar, use_container_width=True)
-        
         with tab2:
-            st.subheader("Kurumlara Göre Bizim Durum")
             df_bizim = df[df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
             if not df_bizim.empty:
                 fig_kurum = px.bar(df_bizim, x='Kurum', title="Bize Oy Vereceklerin Kurum Dağılımı")
                 st.plotly_chart(fig_kurum, use_container_width=True)
-
-        with tab3:
-            st.subheader("Seçim Günü Ulaşım İhtiyacı")
-            ulasim_counts = df['Ulasim'].value_counts().reset_index()
-            ulasim_counts.columns = ['Durum', 'Kişi Sayısı']
-            ulasim_counts = ulasim_counts[ulasim_counts['Durum'].str.len() > 1]
-            fig_ulasim = px.bar(ulasim_counts, x='Durum', y='Kişi Sayısı', color='Durum')
-            st.plotly_chart(fig_ulasim, use_container_width=True)
     else:
-        st.info("Henüz saha ekibi veri girişine başlamadı.")
+        st.info("Henüz yeterli veri girişi yapılmadı.")
