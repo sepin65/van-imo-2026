@@ -2,13 +2,12 @@ import streamlit as st
 import pandas as pd
 import gspread
 import plotly.express as px
-import plotly.graph_objects as go
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import pytz
 
 # Sayfa Ayarları
-st.set_page_config(page_title="İMO Van 2026 - Komuta Merkezi", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="İMO Van 2026", layout="wide", page_icon="🏗️")
 
 # --- 1. BAĞLANTIYI KUR ---
 @st.cache_resource
@@ -29,6 +28,7 @@ def get_data():
         ws = sheet.worksheet("secmenler")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
+        # Sütun isimlerindeki boşlukları temizle
         df.columns = df.columns.str.strip()
         df = df.astype(str)
         
@@ -89,7 +89,7 @@ if df is None:
 if user['Rol'] == 'ADMIN':
     menu_secenekleri = ["📊 360° DERİN ANALİZ", "📝 Seçmen Kartı & Giriş"]
 else:
-    menu_secenekleri = ["📝 Seçmen Kartı & Giriş"] # Saha elemanı analizi görmesin
+    menu_secenekleri = ["📝 Seçmen Kartı & Giriş"]
 
 menu = st.sidebar.radio("Menü", menu_secenekleri)
 
@@ -161,11 +161,10 @@ elif menu == "📝 Seçmen Kartı & Giriş":
 
     search_term = st.text_input("🔎 İsimle Ara", placeholder="Örn: Ahmet")
     
-    # Saha elemanına sadece temel bilgileri göster, EĞİLİM vs GÖSTERME
+    # SAHA ELEMANI LİSTEDE EĞİLİMİ GÖRMESİN
     if user['Rol'] == 'ADMIN':
         cols_show = ['Sicil_No', 'Ad_Soyad', 'Kurum', 'Egilim', 'Son_Guncelleyen']
     else:
-        # SAHA ELEMANI SADECE BUNLARI GÖRÜR LİSTEDE
         cols_show = ['Sicil_No', 'Ad_Soyad', 'Kurum'] 
 
     if search_term:
@@ -194,27 +193,24 @@ elif menu == "📝 Seçmen Kartı & Giriş":
         with c_main:
             st.markdown(f"### ✏️ **{kisi['Ad_Soyad']}**")
             
-            # --- FORM BAŞLANGICI ---
             with st.form("veri_giris"):
-                # --- VERİ GİZLEME MANTIĞI ---
-                # Eğer Admin ise veriyi getir, Saha ise BOŞ GETİR
+                # Veri Getirme Fonksiyonu (Admin görür, Saha göremez)
                 def get_val(field):
                     if user['Rol'] == 'ADMIN':
                         return kisi.get(field, "")
                     else:
-                        return "" # Saha elemanına boş göster
+                        return "" # Saha elemanına boş döner
                 
-                # Kurum (Bu genelde sabittir, saha da görsün mü? Görsün.)
+                # Kurum genelde sabittir, herkes görsün
                 curr_kurum = kisi.get('Kurum', "") 
                 
                 c1, c2 = st.columns(2)
                 with c1:
                     opt_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Diğer"]
-                    # Kurum her zaman görünür kalsın, demografik bilgidir
                     idx_k = opt_kurum.index(curr_kurum) if curr_kurum in opt_kurum else 0
                     yeni_kurum = st.selectbox("Kurum", opt_kurum, index=idx_k)
                     
-                    # GEÇMİŞ (Saha elemanına gizli mi açık mı? Kör giriş için GİZLİ)
+                    # GEÇMİŞ (Kör giriş için gizli)
                     opt_24 = ["", "Sarı Liste", "Mavi Liste"]
                     curr_24 = get_val('Gecmis_2024')
                     idx_24 = opt_24.index(curr_24) if curr_24 in opt_24 else 0
@@ -226,7 +222,7 @@ elif menu == "📝 Seçmen Kartı & Giriş":
                     yeni_22 = st.selectbox("2022 Tercihi", opt_22, index=idx_22)
 
                 with c2:
-                    # EĞİLİM (KESİNLİKLE GİZLİ - SIFIRDAN SEÇECEK)
+                    # EĞİLİM (KESİNLİKLE GİZLİ)
                     opt_egilim = ["", "Tüm Listemizi Yazar", "Büyük Kısmı Yazar", "Kısmen Yazar", "Karşı Tarafı Destekler", "Kararsızım"]
                     curr_egilim = get_val('Egilim')
                     idx_e = opt_egilim.index(curr_egilim) if curr_egilim in opt_egilim else 0
@@ -246,11 +242,47 @@ elif menu == "📝 Seçmen Kartı & Giriş":
                 yeni_rakip = st.text_input("Rakip Ekleme", value=get_val('Rakip_Ekleme'))
                 yeni_referans = st.text_input("Referans", value=get_val('Referans'))
 
-                # --- KAYDET ---
+                # --- KAYDETME İŞLEMİ (HATASIZ) ---
                 if st.form_submit_button("✅ KAYDET"):
                     try:
                         headers = df.columns.tolist()
                         updates = [
                             ("Kurum", yeni_kurum), ("Gecmis_2024", yeni_24), ("Gecmis_2022", yeni_22),
                             ("Referans", yeni_referans), ("Egilim", yeni_egilim), ("Temas_Durumu", yeni_temas),
-                            ("Ulasim", yeni_ulasim), ("Cizikler", yeni_not),
+                            ("Ulasim", yeni_ulasim), ("Cizikler", yeni_not), ("Rakip_Ekleme", yeni_rakip),
+                            ("Son_Guncelleyen", user['Kullanici_Adi'])
+                        ]
+                        
+                        # Ana Tabloyu Güncelle
+                        for col, val in updates:
+                            if col in headers:
+                                ws.update_cell(row_num, headers.index(col) + 1, val)
+                        
+                        # LOGLARA EKLE
+                        if ws_log:
+                            now = datetime.now(pytz.timezone('Turkey')).strftime("%Y-%m-%d %H:%M")
+                            ws_log.append_row([
+                                now, str(sicil_no), kisi['Ad_Soyad'], user['Kullanici_Adi'],
+                                yeni_kurum, yeni_24, yeni_22, yeni_egilim, yeni_temas, yeni_rakip, yeni_ulasim, yeni_not
+                            ])
+                        st.success("Veri başarıyla işlendi!")
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
+
+        # --- SAĞ TARAF (GEÇMİŞ) ---
+        with c_log:
+            if user['Rol'] == 'ADMIN':
+                st.info("🕒 Geçmiş Loglar (Sadece Admin)")
+                if not df_log.empty:
+                    logs = df_log[df_log['Sicil_No'].astype(str) == str(sicil_no)]
+                    if not logs.empty:
+                        for i, r in logs.iloc[::-1].iterrows():
+                            st.caption(f"{r['Zaman']} - {r['Kullanici']}")
+                            # Egilim sütununu kontrol ederek yazdır
+                            e_val = r['Egilim'] if 'Egilim' in r else '-'
+                            st.write(f"**{e_val}**")
+                            st.divider()
+                    else:
+                        st.write("Kayıt yok.")
+            else:
+                st.info("🔒 Geçmiş kayıtlar gizlidir.")
