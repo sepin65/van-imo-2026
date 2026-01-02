@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import gspread
 import plotly.express as px
+import plotly.graph_objects as go
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import pytz
 
 # Sayfa Ayarları
-st.set_page_config(page_title="İMO Van 2026", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="İMO Van 2026 - Komuta Merkezi", layout="wide", page_icon="🏗️")
 
 # --- 1. BAĞLANTIYI KUR ---
 @st.cache_resource
@@ -18,7 +19,7 @@ def get_connection():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. VERİLERİ ÇEK (LOG DAHİL) ---
+# --- 2. VERİLERİ ÇEK ---
 def get_data():
     client = get_connection()
     try:
@@ -28,10 +29,10 @@ def get_data():
         ws = sheet.worksheet("secmenler")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
-        df.columns = df.columns.str.strip() # Boşluk temizliği
+        df.columns = df.columns.str.strip()
         df = df.astype(str)
         
-        # Log Kayıtları (İstihbarat)
+        # Log Kayıtları
         try:
             ws_log = sheet.worksheet("log_kayitlari")
             data_log = ws_log.get_all_records()
@@ -53,141 +54,165 @@ if st.session_state.user is None:
     with st.form("giris_formu"):
         kadi = st.text_input("Kullanıcı Adı")
         sifre = st.text_input("Şifre", type="password")
-        btn = st.form_submit_button("Giriş Yap")
-        
-        if btn:
+        # BUTON FORMUN İÇİNDE
+        if st.form_submit_button("Giriş Yap"):
             try:
                 client = get_connection()
                 sheet = client.open("Van_IMO_Secim_2026")
                 ws_users = sheet.worksheet("kullanicilar")
                 users = ws_users.get_all_records()
                 df_users = pd.DataFrame(users)
-                
                 login_user = df_users[df_users['Kullanici_Adi'] == kadi]
                 if not login_user.empty and str(login_user.iloc[0]['Sifre']) == sifre:
                     st.session_state.user = login_user.iloc[0].to_dict()
                     st.rerun()
                 else:
-                    st.error("❌ Hatalı Kullanıcı Adı veya Şifre")
+                    st.error("❌ Hatalı Giriş")
             except Exception as e:
-                st.error(f"Bağlantı Hatası: {e}")
+                st.error(f"Hata: {e}")
     st.stop()
 
 # --- 4. ANA PROGRAM ---
 user = st.session_state.user
-st.sidebar.success(f"Aktif: {user['Kullanici_Adi']} ({user['Rol']})")
-
-if st.sidebar.button("Çıkış Yap"):
+st.sidebar.success(f"👮‍♂️ {user['Kullanici_Adi']} ({user['Rol']})")
+if st.sidebar.button("Çıkış"):
     st.session_state.user = None
     st.rerun()
 
 df, ws, df_log, ws_log = get_data()
 
 if df is None:
-    st.error("Veri çekilemedi. Lütfen sayfayı yenileyin.")
+    st.error("Veri alınamadı. Sayfayı yenileyin.")
     st.stop()
 
-# --- MENÜ ---
-menu = st.sidebar.radio("Menü", ["📊 DETAYLI ANALİZ RAPORU", "📝 Seçmen Kartı & Veri Girişi"])
+menu = st.sidebar.radio("Menü", ["📊 360° DERİN ANALİZ (V5.0)", "📝 Seçmen Kartı & Giriş"])
 
-# ==========================================
-# EKRAN 1: ANALİZ RAPORU (YENİ VE GELİŞMİŞ)
-# ==========================================
-if menu == "📊 DETAYLI ANALİZ RAPORU":
-    st.title("📊 Seçim Strateji Raporu")
+# =========================================================
+# EKRAN 1: 360 DERECE DERİN ANALİZ (İSTATİSTİK CANAVARI)
+# =========================================================
+if menu == "📊 360° DERİN ANALİZ (V5.0)":
+    st.title("📊 STRATEJİK İSTİHBARAT RAPORU")
     
-    # --- TEMEL RAKAMLAR ---
-    toplam = len(df)
-    # Eğilimi dolu olanlar (Veri girilmiş)
-    ulasilan_df = df[df['Egilim'].str.len() > 1]
-    ulasilan = len(ulasilan_df)
+    # --- VERİ HAZIRLIĞI ---
+    toplam_uye = len(df)
+    temas_df = df[df['Egilim'].str.len() > 1]
+    temas_sayisi = len(temas_df)
+    temas_orani = int(temas_sayisi / toplam_uye * 100) if toplam_uye else 0
     
-    # Bizim Oylar (Sarı Blok + Büyük Kısmı)
-    bizimkiler = ulasilan_df[ulasilan_df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
+    # Bizimkiler
+    bizimkiler = temas_df[temas_df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     bizim_sayi = len(bizimkiler)
     
-    # Oranlar
-    ulasma_orani = int(ulasilan/toplam*100) if toplam else 0
-    basari_orani = int(bizim_sayi/ulasilan*100) if ulasilan else 0
+    # Sicil Analizi için Sayısal Dönüşüm
+    def clean_sicil(x):
+        try:
+            return int(str(x).replace(".", ""))
+        except:
+            return 0
     
-    # Metrikler
+    # Kopyalama uyarısını önlemek için .copy()
+    temas_df = temas_df.copy()
+    temas_df['Sicil_Int'] = temas_df['Sicil_No'].apply(clean_sicil)
+
+    # --- ÜST METRİKLER ---
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Toplam Seçmen", toplam)
-    c2.metric("Temas Edilen", ulasilan, f"%{ulasma_orani}")
-    c3.metric("🟡 KEMİK OYUMUZ", bizim_sayi, f"Temasın %{basari_orani}'si")
-    c4.metric("Kalan (Ulaşılacak)", toplam - ulasilan)
-    
+    c1.metric("Toplam Üye", toplam_uye)
+    c2.metric("Sahada Dokunulan", temas_sayisi, f"%{temas_orani}")
+    c3.metric("🟡 KEMİK OYUMUZ", bizim_sayi, f"Temasın %{int(bizim_sayi/temas_sayisi*100) if temas_sayisi else 0}'i")
+    c4.metric("Kalan Hedef", toplam_uye - temas_sayisi, delta_color="inverse")
+
     st.divider()
-    
-    if ulasilan > 0:
-        # --- TAB 1: GENEL DURUM ---
-        tab1, tab2, tab3 = st.tabs(["Genel Pasta", "🏢 Kurumsal Analiz", "🔄 Geçiş/Swing Analizi"])
+
+    # --- SEKME SEKME ANALİZ ---
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🌍 Genel Durum", 
+        "🏗️ Sicil & Kuşak Analizi", 
+        "🏢 Kurumsal Röntgen", 
+        "🏎️ Ekip Performansı"
+    ])
+
+    # 1. GENEL DURUM
+    with tab1:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("Ulaşılanların Tercih Dağılımı")
+            fig_pie = px.pie(temas_df, names='Egilim', hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
         
-        with tab1:
-            col_gen1, col_gen2 = st.columns(2)
-            with col_gen1:
-                st.subheader("Genel Oy Dağılımı")
-                fig_genel = px.pie(ulasilan_df, names='Egilim', title='Tüm Görüşülenlerin Dağılımı', hole=0.4)
-                st.plotly_chart(fig_genel, use_container_width=True)
-            with col_gen2:
-                st.subheader("Temas Durumu")
-                fig_temas = px.bar(ulasilan_df, x='Temas_Durumu', title="Nasıl Ulaşıldı?", color='Temas_Durumu')
-                st.plotly_chart(fig_temas, use_container_width=True)
-
-        # --- TAB 2: SEKTÖREL / KURUMSAL ANALİZ ---
-        with tab2:
-            st.info("Hangi kurumda ne kadar güçlüyüz? (Sadece 'Sarı Blok' ve 'Büyük Kısmı Yazar' oyları baz alınmıştır)")
-            
-            # Kurumlara göre bizimkilerin sayısı
-            kurum_dagilim = bizimkiler['Kurum'].value_counts().reset_index()
-            kurum_dagilim.columns = ['Kurum', 'Oylarımız']
-            
-            fig_kurum = px.bar(kurum_dagilim, x='Kurum', y='Oylarımız', color='Oylarımız', 
-                               title="Kurumlara Göre Destekçi Sayımız", text_auto=True)
-            st.plotly_chart(fig_kurum, use_container_width=True)
-            
-            # Detaylı Tablo
-            st.markdown("##### 🕵️‍♂️ Sektör Bazlı Detay Tablo")
-            pivot_table = pd.crosstab(ulasilan_df['Kurum'], ulasilan_df['Egilim'])
-            st.dataframe(pivot_table, use_container_width=True)
-
-        # --- TAB 3: SWING / GEÇİŞ ANALİZİ ---
-        with tab3:
-            st.subheader("2024'ten 2026'ya Oy Geçişleri")
-            st.markdown("⚠️ **En Kritik Tablo:** Geçen seçim kime verdi, şimdi ne diyor?")
-            
-            # Sankey mantığı yerine anlaşılır Bar Chart
-            # Sadece geçmiş verisi olanları al
-            gecis_df = ulasilan_df[ulasilan_df['Gecmis_2024'].str.len() > 1]
-            
+        with col_b:
+            st.subheader("2024 -> 2026 Geçişleri")
+            gecis_df = temas_df[temas_df['Gecmis_2024'].str.len() > 1]
             if not gecis_df.empty:
-                fig_gecis = px.histogram(gecis_df, x="Gecmis_2024", color="Egilim", 
-                                       title="2024 Tercihine Göre Şimdiki Dağılım", barmode='group')
-                st.plotly_chart(fig_gecis, use_container_width=True)
-                
-                # ÖZEL ANALİZ: KAZANILANLAR
-                # Geçmişte Mavi olup şimdi Sarı olanlar
-                kazanilanlar = gecis_df[
-                    (gecis_df['Gecmis_2024'].str.contains('Mavi', case=False)) & 
-                    (gecis_df['Egilim'].str.contains('Yazar', case=False))
-                ]
-                st.success(f"🏆 **TRANSFER BAŞARISI:** Geçen seçim MAVİ LİSTE verip, bu seçim BİZİ destekleyen **{len(kazanilanlar)}** kişi var!")
-                if len(kazanilanlar) > 0:
-                    with st.expander("Bu Kahramanları Gör"):
-                        st.dataframe(kazanilanlar[['Ad_Soyad', 'Kurum', 'Referans']])
+                fig_sankey = px.histogram(gecis_df, x="Gecmis_2024", color="Egilim", barmode="group", 
+                                      title="Geçmiş Tercihe Göre Şimdiki Durum")
+                st.plotly_chart(fig_sankey, use_container_width=True)
             else:
-                st.warning("Geçiş analizi için 'Gecmis_2024' verilerinin girilmesi lazım.")
+                st.info("Geçmiş verisi girilmemiş.")
 
-    else:
-        st.info("Analiz ekranının açılması için en az 1 kişiye veri girmelisiniz.")
+    # 2. SİCİL & KUŞAK ANALİZİ
+    with tab2:
+        st.info("Genç Mühendisler (Yüksek Sicil) vs Eski Topraklar (Düşük Sicil) Analizi")
+        
+        # Sicil Grupları
+        bins = [0, 15000, 25000, 35000, 100000]
+        labels = ['Eski Toprak (0-15k)', 'Kıdemli (15k-25k)', 'Orta Kuşak (25k-35k)', 'Yeni Mezun (35k+)']
+        temas_df['Kusak'] = pd.cut(temas_df['Sicil_Int'], bins=bins, labels=labels)
 
-# ==========================================
-# EKRAN 2: SEÇMEN KARTI & VERİ GİRİŞİ (LOGLU)
-# ==========================================
-elif menu == "📝 Seçmen Kartı & Veri Girişi":
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            st.subheader("Hangi Kuşakta Güçlüyüz?")
+            # Sadece bizim oyların kuşak dağılımı
+            bizim_kusak = temas_df[temas_df['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
+            fig_kusak = px.bar(bizim_kusak['Kusak'].value_counts().reset_index(), x='Kusak', y='count', 
+                               title="Bize Oy Verenlerin Kuşak Dağılımı", color='Kusak')
+            st.plotly_chart(fig_kusak, use_container_width=True)
+
+        with col_s2:
+            st.subheader("Kuşaklara Göre Eğilim Tablosu")
+            kusak_pivot = pd.crosstab(temas_df['Kusak'], temas_df['Egilim'])
+            st.dataframe(kusak_pivot, use_container_width=True)
+
+    # 3. KURUMSAL RÖNTGEN
+    with tab3:
+        st.subheader("Kurum Bazlı Başarı Oranı")
+        
+        # Her kurumda kaç kişi var?
+        kurum_genel = temas_df['Kurum'].value_counts().reset_index()
+        kurum_genel.columns = ['Kurum', 'Toplam_Gorusulen']
+        
+        # Her kurumda kaçı bizden?
+        kurum_bizim = bizimkiler['Kurum'].value_counts().reset_index()
+        kurum_bizim.columns = ['Kurum', 'Bizim_Oy']
+        
+        merged = pd.merge(kurum_genel, kurum_bizim, on='Kurum', how='left').fillna(0)
+        merged['Başarı (%)'] = (merged['Bizim_Oy'] / merged['Toplam_Gorusulen'] * 100).astype(int)
+        
+        fig_kurum = px.bar(merged, x='Kurum', y='Başarı (%)', color='Başarı (%)', 
+                           text='Bizim_Oy', title="Kurumlardaki Hakimiyet Oranımız (%)", height=500)
+        st.plotly_chart(fig_kurum, use_container_width=True)
+
+    # 4. EKİP PERFORMANSI
+    with tab4:
+        st.subheader("Saha Ekibi Performans Ligi")
+        if not df_log.empty:
+            # Loglardan kimin kaç işlem yaptığını say
+            performans = df_log['Kullanici'].value_counts().reset_index()
+            performans.columns = ['Saha Elemanı', 'İşlem Sayısı']
+            fig_perf = px.bar(performans, x='Saha Elemanı', y='İşlem Sayısı', color='İşlem Sayısı', text='İşlem Sayısı')
+            st.plotly_chart(fig_perf, use_container_width=True)
+            
+            st.markdown("##### 📝 Son 10 Hareket")
+            st.dataframe(df_log[['Zaman', 'Kullanici', 'Sicil_No', 'Egilim', 'Notlar']].tail(10).sort_index(ascending=False), use_container_width=True)
+        else:
+            st.info("Henüz log kaydı oluşmadı.")
+
+
+# =========================================================
+# EKRAN 2: SEÇMEN KARTI & VERİ GİRİŞİ (HATASIZ FORM)
+# =========================================================
+elif menu == "📝 Seçmen Kartı & Giriş":
     st.header("📋 Seçmen Yönetimi")
     
-    # Arama
     search_term = st.text_input("🔎 İsimle Hızlı Ara", placeholder="Örn: Ahmet")
     
     desired_columns = ['Sicil_No', 'Ad_Soyad', 'Kurum', 'Egilim', 'Son_Guncelleyen']
@@ -207,53 +232,93 @@ elif menu == "📝 Seçmen Kartı & Veri Girişi":
     )
 
     if len(event.selection.rows) > 0:
-        selected_row_idx = event.selection.rows[0]
-        sicil_no = df_display.iloc[selected_row_idx]['Sicil_No']
+        idx = event.selection.rows[0]
+        sicil_no = df_display.iloc[idx]['Sicil_No']
         
-        # Kişiyi bul
+        # Gerçek veriyi bul
         gercek_index = df[df['Sicil_No'] == sicil_no].index[0]
         row_num = gercek_index + 2
         kisi = df.iloc[gercek_index]
 
         st.divider()
-        
-        # İki kolonlu yapı: Sol Taraf Giriş, Sağ Taraf Tarihçe
         col_main, col_hist = st.columns([2, 1])
 
         with col_main:
             st.markdown(f"### ✏️ Düzenle: **{kisi['Ad_Soyad']}**")
-            with st.form("guncelleme_formu"):
+            
+            # --- FORM BAŞLANGICI ---
+            with st.form("veri_giris_formu"):
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.caption("🏢 Kurumsal & Geçmiş")
-                    # Kurum
+                    st.caption("🏢 Kurumsal")
                     opt_kurum = ["", "Özel Sektör", "Dsi", "Karayolları", "Büyükşehir", "Vaski", "Projeci", "Yapı Denetimci", "İlçe Belediyeleri", "Müteahhit", "Yapsat", "Diğer"]
                     curr_kurum = kisi.get('Kurum', "")
                     yeni_kurum = st.selectbox("Kurum", opt_kurum, index=opt_kurum.index(curr_kurum) if curr_kurum in opt_kurum else 0)
                     
-                    # 2024
                     opt_24 = ["", "Sarı Liste", "Mavi Liste"]
                     curr_24 = kisi.get('Gecmis_2024', "")
                     yeni_24 = st.selectbox("2024 Tercihi", opt_24, index=opt_24.index(curr_24) if curr_24 in opt_24 else 0)
                     
-                    # Referans
                     yeni_referans = st.text_input("Referans", value=kisi.get('Referans', ""))
 
                 with c2:
                     st.caption("🗳️ 2026 Durumu")
-                    # Eğilim
                     opt_egilim = ["", "Tüm Listemizi Yazar", "Büyük Kısmı Yazar", "Kısmen Yazar", "Karşı Tarafı Destekler", "Kararsızım"]
                     curr_egilim = kisi.get('Egilim', "")
                     yeni_egilim = st.selectbox("2026 Eğilimi", opt_egilim, index=opt_egilim.index(curr_egilim) if curr_egilim in opt_egilim else 0)
 
-                    # Temas
-                    opt_temas = ["", "Kendim Görüştüm", "Arkadaşım/Akraba Aracılığı", "Tanımıyorum"]
-                    curr_temas = kisi.get('Temas_Durumu', "")
-                    yeni_temas = st.selectbox("Temas Şekli", opt_temas, index=opt_temas.index(curr_temas) if curr_temas in opt_temas else 0)
-                    
-                    # Ulaşım
                     opt_ulasim = ["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek", "Temsilcilikten Gelecek"]
                     curr_ulasim = kisi.get('Ulasim', "")
                     yeni_ulasim = st.selectbox("Ulaşım", opt_ulasim, index=opt_ulasim.index(curr_ulasim) if curr_ulasim in opt_ulasim else 0)
+
+                    # Rakip Ekleme
+                    yeni_rakip = st.text_input("Rakip Ekleme", value=kisi.get('Rakip_Ekleme', ""))
+
+                # Notlar
+                yeni_cizik = st.text_area("📝 Notlar / Çizikler (Log'a işlenir)", value=kisi.get('Cizikler', ""))
+
+                # --- KAYDET BUTONU (KESİNLİKLE FORMUN İÇİNDE) ---
+                submitted = st.form_submit_button("✅ BİLGİLERİ KAYDET")
                 
-                # Notlar (Geni
+                if submitted:
+                    try:
+                        headers = df.columns.tolist()
+                        updates = [
+                            ("Kurum", yeni_kurum), ("Gecmis_2024", yeni_24),
+                            ("Referans", yeni_referans), ("Egilim", yeni_egilim),
+                            ("Ulasim", yeni_ulasim), ("Cizikler", yeni_cizik), 
+                            ("Rakip_Ekleme", yeni_rakip),
+                            ("Son_Guncelleyen", user['Kullanici_Adi'])
+                        ]
+                        
+                        # 1. Ana Excel Güncelleme
+                        for col_name, val in updates:
+                            if col_name in headers:
+                                ws.update_cell(row_num, headers.index(col_name) + 1, val)
+                        
+                        # 2. Log Kaydı
+                        if ws_log:
+                            zaman = datetime.now(pytz.timezone('Turkey')).strftime("%Y-%m-%d %H:%M")
+                            ws_log.append_row([
+                                zaman, str(sicil_no), kisi['Ad_Soyad'], 
+                                user['Kullanici_Adi'], yeni_kurum, yeni_egilim, yeni_cizik
+                            ])
+                        
+                        st.success("✅ Veri Kaydedildi!")
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
+
+        # --- SAĞ TARAF: GEÇMİŞ (LOGLAR) ---
+        with col_hist:
+            st.info("🕒 Hareket Dökümü")
+            if not df_log.empty:
+                kisi_loglari = df_log[df_log['Sicil_No'].astype(str) == str(sicil_no)]
+                if not kisi_loglari.empty:
+                    for i, row in kisi_loglari.iloc[::-1].iterrows():
+                        st.markdown(f"**{row['Kullanici']}** - {row['Zaman']}")
+                        st.caption(f"Durum: {row['Egilim']}")
+                        if str(row['Notlar']).strip():
+                            st.text(f"Not: {row['Notlar']}")
+                        st.divider()
+                else:
+                    st.write("Geçmiş kaydı yok.")
