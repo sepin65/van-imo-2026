@@ -37,7 +37,7 @@ def get_data():
         df.columns = df.columns.str.strip()
         df = df.astype(str)
         
-        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022']
+        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon']
         for col in required_cols:
             if col not in df.columns:
                 df[col] = ""
@@ -110,13 +110,35 @@ if st.session_state.user is None:
                 st.error(f"Hata: {e}")
     st.stop()
 
-# --- 4. POP-UP FORM ---
-@st.dialog("✏️ SEÇMEN BİLGİSİ DÜZENLE")
-def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log):
-    st.markdown(f"**{kisi['Ad_Soyad']}** ({kisi.get('Sandik_No', '-')})")
+# --- 4. POP-UP FORM (HAFIZA SİSTEMİ EKLENDİ) ---
+@st.dialog("✏️ SEÇMEN KARTI & GEÇMİŞ")
+def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
+    st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
+    st.caption(f"Sandık: {kisi.get('Sandik_No', '-')} | Sicil: {sicil}")
     
     is_admin = (user['Rol'] == 'ADMIN')
     def get(f): return kisi.get(f, "") if is_admin else ""
+
+    # --- GEÇMİŞ HAREKETLER TABLOSU (YENİ ÖZELLİK) ---
+    st.info("🕒 **Seçmen Hafızası (Kim Ne Demiş?):**")
+    if not df_log.empty:
+        # Sadece bu kişiye ait logları çek
+        kisi_loglari = df_log[df_log['Sicil_No'].astype(str) == str(sicil)]
+        
+        if not kisi_loglari.empty:
+            # Okunabilir sade bir tablo yap
+            gosterilecek_log = kisi_loglari[['Zaman', 'Kullanici', 'Egilim', 'Cizikler']].copy()
+            gosterilecek_log.columns = ['Tarih', 'Görüşen', 'Tespit', 'Notlar']
+            # En yeniden en eskiye sırala
+            gosterilecek_log = gosterilecek_log.sort_values(by='Tarih', ascending=False)
+            st.dataframe(gosterilecek_log, use_container_width=True, hide_index=True)
+        else:
+            st.caption("Bu kişiyle ilgili henüz geçmiş kayıt yok.")
+    else:
+        st.caption("Log kaydı bulunamadı.")
+
+    st.divider()
+    st.markdown("#### 📝 Yeni Veri Girişi")
 
     with st.form("popup_form"):
         c1, c2 = st.columns(2)
@@ -150,7 +172,7 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log):
         n_rakip = st.text_input("Rakip Ekleme", value=get('Rakip_Ekleme'))
         n_ref = st.text_input("Referans", value=get('Referans'))
 
-        if st.form_submit_button("✅ KAYDET"):
+        if st.form_submit_button("✅ GÜNCELLE VE KAYDET"):
             try:
                 updates = [
                     ("Kurum", n_kurum), ("Gecmis_2024", n_24), ("Gecmis_2022", n_22),
@@ -158,16 +180,18 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log):
                     ("Cizikler", n_not), ("Rakip_Ekleme", n_rakip), ("Referans", n_ref),
                     ("Son_Guncelleyen", user['Kullanici_Adi'])
                 ]
+                # Excel Update
                 for col, val in updates:
                     if col in df_cols:
                         ws.update_cell(row_n, df_cols.index(col)+1, val)
                 
+                # Log Update
                 if ws_log:
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
                     ws_log.append_row(log_data)
                 
-                st.success("Kaydedildi!")
+                st.success("✅ Veri Kaydedildi!")
                 time.sleep(1)
                 st.rerun() 
                 
@@ -196,7 +220,7 @@ else:
     menu = st.sidebar.radio("Menü", ["📝 Veri Girişi"])
 
 # =========================================================
-# ANALİZ (YAPAY ZEKA MODÜLÜ EKLENDİ)
+# ANALİZ
 # =========================================================
 if menu == "📊 ANALİZ RAPORU" and user['Rol'] == 'ADMIN':
     st.title("📊 Seçim Komuta Masası")
@@ -208,39 +232,32 @@ if menu == "📊 ANALİZ RAPORU" and user['Rol'] == 'ADMIN':
     bizim_sayi = len(bizimkiler)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Toplam Oda Üyesi", len(df), "Hedef Kitle")
+    c1.metric("Toplam Oda Üyesi", len(df))
     c2.metric("Sahada Dokunulan", len(temas), f"%{int(len(temas)/len(df)*100) if len(df) else 0}")
     c3.metric("🟡 BİZİM OYLAR", bizim_sayi, f"Hedefin %{int(bizim_sayi/hedef_oy*100) if hedef_oy else 0}'i")
     c4.metric("Kazanmak İçin Gereken", hedef_oy - bizim_sayi, delta_color="inverse")
     
     st.divider()
 
-    # YAPAY ZEKA VE DİĞER SEKMELER
-    tabs = st.tabs(["🤖 YAPAY ZEKA TAHMİNİ", "🌍 GENEL", "🗳️ SANDIKLAR", "🏢 KURUMLAR", "🎯 FIRSAT", "⚡ EKİP"])
+    tabs = st.tabs(["🤖 YAPAY ZEKA", "🌍 GENEL", "🗳️ SANDIKLAR", "🏢 KURUMLAR", "🎯 FIRSAT", "⚡ EKİP"])
 
-    # 1. YAPAY ZEKA (YENİ)
+    # 1. YAPAY ZEKA
     with tabs[0]:
         st.subheader("🤖 YZ Seçim Simülasyonu")
-        st.info("Bu modül, mevcut verilere ve kararsızların profil analizine dayanarak seçim sonucunu tahmin eder.")
+        st.info("Bu modül, sahadaki kararsızların %60'ının lehimize döneceğini öngörerek hesaplama yapar.")
         
-        # --- BASİT TAHMİN ALGORİTMASI ---
-        # 1. Bizim oylar cepte.
-        # 2. Kararsızların %60'ı (İyimser Tahmin) bize dönebilir varsayımı.
-        # 3. Henüz ulaşılmayanların genel eğilime göre dağılımı.
-        
-        potansiyel_kazanim = int(len(kararsizlar) * 0.6) # Kararsızların %60'ı
+        potansiyel_kazanim = int(len(kararsizlar) * 0.6) 
         tahmini_toplam = bizim_sayi + potansiyel_kazanim
-        kazanma_ihtimali = min(int((tahmini_toplam / hedef_oy) * 100), 99)
+        kazanma_ihtimali = min(int((tahmini_toplam / hedef_oy) * 100), 99) if hedef_oy > 0 else 0
         
         col_ai1, col_ai2 = st.columns([1, 2])
         
         with col_ai1:
             st.markdown(f"""
             ### 🔮 Tahmini Sonuç
-            # %{int(tahmini_toplam / len(df) * 100)}
+            # %{int(tahmini_toplam / len(df) * 100) if len(df) > 0 else 0}
             **Oy Oranı**
             """)
-            
             if tahmini_toplam > hedef_oy:
                 st.success("✅ YZ Analizi: KAZANIYORUZ!")
             else:
@@ -262,8 +279,6 @@ if menu == "📊 ANALİZ RAPORU" and user['Rol'] == 'ADMIN':
                         'thickness': 0.75,
                         'value': 50}}))
             st.plotly_chart(fig_gauge, use_container_width=True)
-            
-        st.caption(f"*Analiz Detayı: {len(kararsizlar)} kararsız seçmenin {potansiyel_kazanim} tanesinin lehimize döneceği öngörülmüştür.*")
 
     with tabs[1]:
         c1, c2 = st.columns(2)
@@ -311,9 +326,8 @@ if menu == "📊 ANALİZ RAPORU" and user['Rol'] == 'ADMIN':
             st.bar_chart(perf.set_index('İsim'))
             st.dataframe(df_log.tail(10), use_container_width=True)
 
-
 # =========================================================
-# VERİ GİRİŞİ (20 KİŞİLİK SAYFALAMA)
+# VERİ GİRİŞİ
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
@@ -329,26 +343,19 @@ elif menu == "📝 Veri Girişi":
     
     cols = ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Egilim', 'Son_Guncelleyen'] if is_admin else ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum']
     
-    # --- YENİ SAYFALAMA (20 KİŞİ) ---
     if search:
-        # Arama varsa sayfalama yok
         df_show = df[df['Ad_Soyad'].str.contains(search, case=False, na=False)]
         st.caption(f"🔍 '{search}' araması için {len(df_show)} sonuç.")
     else:
-        # 20 KİŞİLİK DİLİMLER
         page_size = 20
         total_pages = math.ceil(len(df) / page_size)
-        
-        if 'page_number' not in st.session_state:
-            st.session_state.page_number = 1
+        if 'page_number' not in st.session_state: st.session_state.page_number = 1
             
         c_prev, c_page, c_next = st.columns([1, 2, 1])
         with c_prev:
-            if st.button("⬅️ Önceki") and st.session_state.page_number > 1:
-                st.session_state.page_number -= 1
+            if st.button("⬅️ Önceki") and st.session_state.page_number > 1: st.session_state.page_number -= 1
         with c_next:
-            if st.button("Sonraki ➡️") and st.session_state.page_number < total_pages:
-                st.session_state.page_number += 1
+            if st.button("Sonraki ➡️") and st.session_state.page_number < total_pages: st.session_state.page_number += 1
         with c_page:
             st.markdown(f"**Sayfa {st.session_state.page_number} / {total_pages}**")
 
@@ -356,21 +363,14 @@ elif menu == "📝 Veri Girişi":
         end_idx = start_idx + page_size
         df_show = df.iloc[start_idx:end_idx]
 
-    # Tablo
-    event = st.dataframe(
-        df_show[cols], 
-        use_container_width=True, 
-        hide_index=True, 
-        on_select="rerun", 
-        selection_mode="single-row"
-    )
+    event = st.dataframe(df_show[cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if len(event.selection.rows) > 0:
         idx = event.selection.rows[0]
         sicil = df_show.iloc[idx]['Sicil_No']
-        
         g_idx = df[df['Sicil_No'] == sicil].index[0]
         row_n = g_idx + 2
         kisi = df.iloc[g_idx]
         
-        entry_form_dialog(kisi, row_n, sicil, user, df.columns.tolist(), ws, ws_log)
+        # POP-UP'A LOG DATAFRAME'İNİ DE GÖNDERİYORUZ
+        entry_form_dialog(kisi, row_n, sicil, user, df.columns.tolist(), ws, ws_log, df_log)
