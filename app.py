@@ -7,7 +7,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
 import math
-import random
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(
@@ -31,12 +30,15 @@ def get_data():
     client = get_connection()
     try:
         sheet = client.open("Van_IMO_Secim_2026")
+        
+        # --- ANA LİSTE ---
         ws = sheet.worksheet("secmenler")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
-        df.columns = df.columns.str.strip()
+        df.columns = df.columns.str.strip() # Boşluk temizliği
         df = df.astype(str)
         
+        # Sütun Garantisi
         required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon']
         for col in required_cols:
             if col not in df.columns:
@@ -59,14 +61,33 @@ def get_data():
         except:
             df['Sandik_No'] = "Belirsiz"
 
+        # --- LOG KAYITLARI (TAMİR EDİLDİ) ---
         try:
             ws_log = sheet.worksheet("log_kayitlari")
-            data_log = ws_log.get_all_records()
-            df_log = pd.DataFrame(data_log)
         except:
-            df_log = pd.DataFrame()
-            ws_log = None
-            
+            # Sayfa yoksa oluştur
+            ws_log = sheet.add_worksheet(title="log_kayitlari", rows="1000", cols="20")
+        
+        data_log = ws_log.get_all_records()
+        df_log = pd.DataFrame(data_log)
+        
+        # Eğer log sayfası boşsa veya sütunlar eksikse başlıkları yaz
+        expected_headers = ['Zaman', 'Sicil_No', 'Ad_Soyad', 'Kullanici', 'Kurum', 'Egilim', 'Gecmis_2024', 'Gecmis_2022', 'Temas_Durumu', 'Rakip_Ekleme', 'Ulasim', 'Cizikler']
+        
+        if df_log.empty or not set(expected_headers).issubset(df_log.columns):
+            # Sadece başlık satırı yoksa ekle (Veri kaybetmemek için sadece boşsa yapıyoruz)
+            if len(data_log) == 0:
+                ws_log.clear()
+                ws_log.append_row(expected_headers)
+                df_log = pd.DataFrame(columns=expected_headers) # Boş dataframe oluştur
+            else:
+                # Veri var ama sütun isimleri uyuşmuyorsa, sütunları temizle
+                df_log.columns = df_log.columns.str.strip()
+        
+        # Sicil_No kesinlikle string olsun ki eşleşme hatası olmasın
+        if not df_log.empty and 'Sicil_No' in df_log.columns:
+            df_log['Sicil_No'] = df_log['Sicil_No'].astype(str)
+
         return df, ws, df_log, ws_log
     except Exception as e:
         return None, None, None, None
@@ -110,7 +131,7 @@ if st.session_state.user is None:
                 st.error(f"Hata: {e}")
     st.stop()
 
-# --- 4. POP-UP FORM (HAFIZA SİSTEMİ EKLENDİ) ---
+# --- 4. POP-UP FORM (SESSİZ KAYIT - YENİLEME YOK) ---
 @st.dialog("✏️ SEÇMEN KARTI & GEÇMİŞ")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
@@ -119,27 +140,27 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     is_admin = (user['Rol'] == 'ADMIN')
     def get(f): return kisi.get(f, "") if is_admin else ""
 
-    # --- GEÇMİŞ HAREKETLER TABLOSU (YENİ ÖZELLİK) ---
+    # --- GEÇMİŞ TABLOSU (TAMİR EDİLDİ) ---
     st.info("🕒 **Seçmen Hafızası (Kim Ne Demiş?):**")
-    if not df_log.empty:
-        # Sadece bu kişiye ait logları çek
-        kisi_loglari = df_log[df_log['Sicil_No'].astype(str) == str(sicil)]
+    
+    log_found = False
+    if not df_log.empty and 'Sicil_No' in df_log.columns:
+        # İki tarafı da string'e çevirip karşılaştırıyoruz (KESİN ÇÖZÜM)
+        kisi_loglari = df_log[df_log['Sicil_No'].astype(str).str.strip() == str(sicil).strip()]
         
         if not kisi_loglari.empty:
-            # Okunabilir sade bir tablo yap
-            gosterilecek_log = kisi_loglari[['Zaman', 'Kullanici', 'Egilim', 'Cizikler']].copy()
-            gosterilecek_log.columns = ['Tarih', 'Görüşen', 'Tespit', 'Notlar']
-            # En yeniden en eskiye sırala
-            gosterilecek_log = gosterilecek_log.sort_values(by='Tarih', ascending=False)
-            st.dataframe(gosterilecek_log, use_container_width=True, hide_index=True)
-        else:
-            st.caption("Bu kişiyle ilgili henüz geçmiş kayıt yok.")
-    else:
-        st.caption("Log kaydı bulunamadı.")
+            log_found = True
+            gosterilecek = kisi_loglari[['Zaman', 'Kullanici', 'Egilim', 'Cizikler']].copy()
+            gosterilecek.columns = ['Tarih', 'Görüşen', 'Durum', 'Not']
+            gosterilecek = gosterilecek.sort_values(by='Tarih', ascending=False)
+            st.dataframe(gosterilecek, use_container_width=True, hide_index=True)
+            
+    if not log_found:
+        st.caption("📭 Bu kişiyle ilgili henüz geçmiş kayıt bulunamadı.")
 
     st.divider()
-    st.markdown("#### 📝 Yeni Veri Girişi")
-
+    
+    # --- FORM ---
     with st.form("popup_form"):
         c1, c2 = st.columns(2)
         with c1:
@@ -188,10 +209,11 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
                 # Log Update
                 if ws_log:
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    # Excel'deki sütun sırasına göre veri hazırlıyoruz
                     log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
                     ws_log.append_row(log_data)
                 
-                st.success("✅ Veri Kaydedildi!")
+                st.toast("✅ Veri ve Log Kaydedildi!", icon="💾")
                 time.sleep(1)
                 st.rerun() 
                 
@@ -232,7 +254,7 @@ if menu == "📊 ANALİZ RAPORU" and user['Rol'] == 'ADMIN':
     bizim_sayi = len(bizimkiler)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Toplam Oda Üyesi", len(df))
+    c1.metric("Toplam Oda Üyesi", len(df), "Hedef Kitle")
     c2.metric("Sahada Dokunulan", len(temas), f"%{int(len(temas)/len(df)*100) if len(df) else 0}")
     c3.metric("🟡 BİZİM OYLAR", bizim_sayi, f"Hedefin %{int(bizim_sayi/hedef_oy*100) if hedef_oy else 0}'i")
     c4.metric("Kazanmak İçin Gereken", hedef_oy - bizim_sayi, delta_color="inverse")
@@ -326,8 +348,9 @@ if menu == "📊 ANALİZ RAPORU" and user['Rol'] == 'ADMIN':
             st.bar_chart(perf.set_index('İsim'))
             st.dataframe(df_log.tail(10), use_container_width=True)
 
+
 # =========================================================
-# VERİ GİRİŞİ
+# VERİ GİRİŞİ (SAYFALAMA)
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
@@ -336,7 +359,6 @@ elif menu == "📝 Veri Girişi":
     if is_admin: st.success("YETKİLİ MODU")
     else: st.info("SAHA MODU")
 
-    # Arama
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     def update_search(): st.session_state.search_term = st.session_state.widget_search
     search = st.text_input("🔍 İsim Ara (Liste aşağıdadır)", value=st.session_state.search_term, key="widget_search", on_change=update_search)
@@ -372,5 +394,4 @@ elif menu == "📝 Veri Girişi":
         row_n = g_idx + 2
         kisi = df.iloc[g_idx]
         
-        # POP-UP'A LOG DATAFRAME'İNİ DE GÖNDERİYORUZ
         entry_form_dialog(kisi, row_n, sicil, user, df.columns.tolist(), ws, ws_log, df_log)
