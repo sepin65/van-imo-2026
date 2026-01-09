@@ -25,16 +25,29 @@ def get_connection():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. VERİLERİ ÇEK (OTO-KURTARMA MODÜLÜ) ---
+# --- 2. VERİLERİ ÇEK (ZIRHLI MOD - HATA GEÇİRMEZ) ---
 def get_data():
     client = get_connection()
     try:
         sheet = client.open("Van_IMO_Secim_2026")
         
-        # --- ANA LİSTE ---
+        # --- ANA LİSTE (Güvenli Okuma) ---
         ws = sheet.worksheet("secmenler")
-        data = ws.get_all_records()
-        df = pd.DataFrame(data)
+        # get_all_records yerine get_all_values kullanıyoruz (Daha güvenli)
+        all_data = ws.get_all_values()
+        
+        if len(all_data) > 1:
+            headers = all_data[0]
+            rows = all_data[1:]
+            
+            # Boş başlıkları temizle (Hatanın kaynağı burasıydı)
+            cleaned_headers = [h if h.strip() != "" else f"Bos_Sutun_{i}" for i, h in enumerate(headers)]
+            
+            df = pd.DataFrame(rows, columns=cleaned_headers)
+        else:
+            df = pd.DataFrame() # Boşsa hata verme
+
+        # Sütun Temizliği
         df.columns = df.columns.str.strip()
         df = df.astype(str)
         
@@ -60,43 +73,40 @@ def get_data():
         except:
             df['Sandik_No'] = "Belirsiz"
 
-        # --- LOG KAYITLARI (OTO-KURTARMA AKTİF) ---
+        # --- LOG KAYITLARI (Güvenli Okuma) ---
         try:
             ws_log = sheet.worksheet("log_kayitlari")
         except:
             ws_log = sheet.add_worksheet(title="log_kayitlari", rows="1000", cols="20")
         
-        # Tüm veriyi ham olarak çek (başlıklar dahil)
-        all_values = ws_log.get_all_values()
+        log_data_raw = ws_log.get_all_values()
         
-        # Olması gereken başlıklar
+        # Log Başlık Kontrolü ve Onarımı
         correct_headers = ['Zaman', 'Sicil_No', 'Ad_Soyad', 'Kullanici', 'Kurum', 'Egilim', 'Gecmis_2024', 'Gecmis_2022', 'Temas_Durumu', 'Rakip_Ekleme', 'Ulasim', 'Cizikler']
         
-        # EĞER SAYFA BOŞSA VEYA BAŞLIKLAR YANLIŞSA -> TAMİR ET
-        needs_repair = False
-        if not all_values: # Hiç veri yok
-            needs_repair = True
-        elif all_values[0] != correct_headers: # Başlıklar uyuşmuyor
-            # Eğer içinde çok veri yoksa (başlık hatası varsa) sıfırla ve düzelt
-            if len(all_values) < 5: 
-                needs_repair = True
-        
-        if needs_repair:
-            ws_log.clear() # Sayfayı temizle
-            ws_log.append_row(correct_headers) # Doğru başlıkları yaz
-            df_log = pd.DataFrame(columns=correct_headers) # Boş dataframe
+        # Eğer sayfa boşsa veya başlıklar bozuksa onar
+        if not log_data_raw or (len(log_data_raw) > 0 and log_data_raw[0] != correct_headers):
+             # Eğer çok az veri varsa risk alıp düzelt, çok veri varsa sadece başlığı düzeltmeye çalış
+            if len(log_data_raw) < 5:
+                ws_log.clear()
+                ws_log.append_row(correct_headers)
+                df_log = pd.DataFrame(columns=correct_headers)
+            else:
+                 # Veri var ama başlık bozuksa, manuel DataFrame oluştur
+                 headers = log_data_raw[0]
+                 cleaned_log_headers = [h if h.strip() != "" else f"Bos_{i}" for i, h in enumerate(headers)]
+                 df_log = pd.DataFrame(log_data_raw[1:], columns=cleaned_log_headers)
         else:
-            # Her şey yolundaysa veriyi al
-            df_log = pd.DataFrame(all_values[1:], columns=all_values[0])
+            df_log = pd.DataFrame(log_data_raw[1:], columns=log_data_raw[0])
 
-        # Sicil_No eşleşmesi için string yap
         if not df_log.empty and 'Sicil_No' in df_log.columns:
             df_log['Sicil_No'] = df_log['Sicil_No'].astype(str)
 
         return df, ws, df_log, ws_log
     except Exception as e:
-        st.error(f"Veri çekme hatası: {e}")
-        return None, None, None, None
+        # Hata olsa bile kullanıcıya gösterip devam etmeye çalış
+        st.error(f"Sistem Hatası (Merak etme veriler güvende): {e}")
+        return pd.DataFrame(), None, pd.DataFrame(), None
 
 # --- SAYAÇ ---
 def get_countdown():
@@ -152,7 +162,6 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     log_found = False
     if df_log is not None and not df_log.empty and 'Sicil_No' in df_log.columns:
         sicil_str = str(sicil).strip()
-        # Loglardaki sicil numaralarını string yapıp karşılaştır
         kisi_loglari = df_log[df_log['Sicil_No'].astype(str).str.strip() == sicil_str]
         
         if not kisi_loglari.empty:
@@ -163,7 +172,7 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
                 gosterilecek = gosterilecek.sort_values(by='Tarih', ascending=False)
                 st.dataframe(gosterilecek, use_container_width=True, hide_index=True)
             except:
-                st.caption("Log formatı düzenleniyor...")
+                pass
             
     if not log_found:
         st.caption("📭 Bu kişiyle ilgili henüz geçmiş kayıt bulunamadı.")
@@ -216,26 +225,11 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
                 
                 if ws_log:
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    # Başlık sırasına tam uygun kayıt
-                    log_data = [
-                        now, 
-                        str(sicil), 
-                        kisi['Ad_Soyad'], 
-                        user['Kullanici_Adi'], 
-                        n_kurum, 
-                        n_egilim, 
-                        n_24, 
-                        n_22, 
-                        n_temas, 
-                        n_rakip, 
-                        n_ulasim, 
-                        n_not
-                    ]
+                    log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
                     ws_log.append_row(log_data)
                 
                 st.toast("✅ Veri Kaydedildi!", icon="💾")
-                time.sleep(1)
-                st.rerun()
+                # YENİLEME YOK
                 
             except Exception as e:
                 st.error(f"Hata: {e}")
@@ -252,7 +246,8 @@ if st.sidebar.button("Çıkış Yap"):
 
 df, ws, df_log, ws_log = get_data()
 
-if df is None:
+if df.empty:
+    st.error("Veriler okunamadı. Lütfen Excel dosyasındaki başlıkları kontrol edin.")
     st.stop()
 
 if user['Rol'] == 'ADMIN':
@@ -336,7 +331,7 @@ if menu == "📊 ANALİZ RAPORU" and user['Rol'] == 'ADMIN':
             st.dataframe(df_log.tail(10), use_container_width=True)
 
 # =========================================================
-# VERİ GİRİŞİ (SAYFALAMA VE GİT ÖZELLİĞİ)
+# VERİ GİRİŞİ
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
@@ -357,18 +352,14 @@ elif menu == "📝 Veri Girişi":
     else:
         page_size = 20
         total_pages = math.ceil(len(df) / page_size)
-        
-        # Sayfa Hafızası
         if 'page_number' not in st.session_state: st.session_state.page_number = 1
         
-        # --- GELİŞMİŞ NAVİGASYON ---
         c1, c2, c3 = st.columns([1, 2, 1])
         with c1: 
             if st.button("⬅️ Önceki") and st.session_state.page_number > 1: st.session_state.page_number -= 1
         with c3:
             if st.button("Sonraki ➡️") and st.session_state.page_number < total_pages: st.session_state.page_number += 1
         with c2:
-            # Kutucuk ile gitme
             target = st.number_input("Sayfa No:", min_value=1, max_value=total_pages, value=st.session_state.page_number)
             if target != st.session_state.page_number:
                 st.session_state.page_number = target
@@ -383,7 +374,4 @@ elif menu == "📝 Veri Girişi":
         idx = event.selection.rows[0]
         sicil = df_show.iloc[idx]['Sicil_No']
         g_idx = df[df['Sicil_No'] == sicil].index[0]
-        row_n = g_idx + 2
-        kisi = df.iloc[g_idx]
-        
-        entry_form_dialog(kisi, row_n, sicil, user, df.columns.tolist(), ws, ws_log, df_log)
+        entry_form_dialog(df.iloc[g_idx], g_idx + 2, sicil, user, df.columns.tolist(), ws, ws_log, df_log)
