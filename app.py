@@ -25,7 +25,7 @@ def get_connection():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. VERİLERİ ÇEK (OTO-TAMİR MODÜLÜ) ---
+# --- 2. VERİLERİ ÇEK (OTO-KURTARMA MODÜLÜ) ---
 def get_data():
     client = get_connection()
     try:
@@ -60,36 +60,42 @@ def get_data():
         except:
             df['Sandik_No'] = "Belirsiz"
 
-        # --- LOG KAYITLARI (OTO-TAMİR) ---
+        # --- LOG KAYITLARI (OTO-KURTARMA AKTİF) ---
         try:
             ws_log = sheet.worksheet("log_kayitlari")
         except:
             ws_log = sheet.add_worksheet(title="log_kayitlari", rows="1000", cols="20")
         
+        # Tüm veriyi ham olarak çek (başlıklar dahil)
         all_values = ws_log.get_all_values()
+        
+        # Olması gereken başlıklar
         correct_headers = ['Zaman', 'Sicil_No', 'Ad_Soyad', 'Kullanici', 'Kurum', 'Egilim', 'Gecmis_2024', 'Gecmis_2022', 'Temas_Durumu', 'Rakip_Ekleme', 'Ulasim', 'Cizikler']
         
+        # EĞER SAYFA BOŞSA VEYA BAŞLIKLAR YANLIŞSA -> TAMİR ET
         needs_repair = False
-        if not all_values: 
+        if not all_values: # Hiç veri yok
             needs_repair = True
-        else:
-            current_headers = all_values[0]
-            if len(current_headers) != len(correct_headers) or current_headers.count('Egilim') > 1:
-                if len(all_values) < 5: 
-                    needs_repair = True
+        elif all_values[0] != correct_headers: # Başlıklar uyuşmuyor
+            # Eğer içinde çok veri yoksa (başlık hatası varsa) sıfırla ve düzelt
+            if len(all_values) < 5: 
+                needs_repair = True
         
         if needs_repair:
-            ws_log.clear()
-            ws_log.append_row(correct_headers)
-            df_log = pd.DataFrame(columns=correct_headers)
+            ws_log.clear() # Sayfayı temizle
+            ws_log.append_row(correct_headers) # Doğru başlıkları yaz
+            df_log = pd.DataFrame(columns=correct_headers) # Boş dataframe
         else:
+            # Her şey yolundaysa veriyi al
             df_log = pd.DataFrame(all_values[1:], columns=all_values[0])
 
+        # Sicil_No eşleşmesi için string yap
         if not df_log.empty and 'Sicil_No' in df_log.columns:
             df_log['Sicil_No'] = df_log['Sicil_No'].astype(str)
 
         return df, ws, df_log, ws_log
     except Exception as e:
+        st.error(f"Veri çekme hatası: {e}")
         return None, None, None, None
 
 # --- SAYAÇ ---
@@ -146,6 +152,7 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     log_found = False
     if df_log is not None and not df_log.empty and 'Sicil_No' in df_log.columns:
         sicil_str = str(sicil).strip()
+        # Loglardaki sicil numaralarını string yapıp karşılaştır
         kisi_loglari = df_log[df_log['Sicil_No'].astype(str).str.strip() == sicil_str]
         
         if not kisi_loglari.empty:
@@ -156,7 +163,7 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
                 gosterilecek = gosterilecek.sort_values(by='Tarih', ascending=False)
                 st.dataframe(gosterilecek, use_container_width=True, hide_index=True)
             except:
-                pass
+                st.caption("Log formatı düzenleniyor...")
             
     if not log_found:
         st.caption("📭 Bu kişiyle ilgili henüz geçmiş kayıt bulunamadı.")
@@ -209,11 +216,26 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
                 
                 if ws_log:
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    log_data = [now, str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], n_kurum, n_egilim, n_24, n_22, n_temas, n_rakip, n_ulasim, n_not]
+                    # Başlık sırasına tam uygun kayıt
+                    log_data = [
+                        now, 
+                        str(sicil), 
+                        kisi['Ad_Soyad'], 
+                        user['Kullanici_Adi'], 
+                        n_kurum, 
+                        n_egilim, 
+                        n_24, 
+                        n_22, 
+                        n_temas, 
+                        n_rakip, 
+                        n_ulasim, 
+                        n_not
+                    ]
                     ws_log.append_row(log_data)
                 
-                st.toast("✅ Veri ve Log Kaydedildi!", icon="💾")
-                # YENİLEME YOK (Sayfa zıplamasını önlemek için)
+                st.toast("✅ Veri Kaydedildi!", icon="💾")
+                time.sleep(1)
+                st.rerun()
                 
             except Exception as e:
                 st.error(f"Hata: {e}")
@@ -314,7 +336,7 @@ if menu == "📊 ANALİZ RAPORU" and user['Rol'] == 'ADMIN':
             st.dataframe(df_log.tail(10), use_container_width=True)
 
 # =========================================================
-# VERİ GİRİŞİ (SAYFA NUMARASI GİRME ÖZELLİKLİ)
+# VERİ GİRİŞİ (SAYFALAMA VE GİT ÖZELLİĞİ)
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
@@ -325,7 +347,7 @@ elif menu == "📝 Veri Girişi":
 
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     def update_search(): st.session_state.search_term = st.session_state.widget_search
-    search = st.text_input("🔍 İsim Ara (Liste aşağıdadır)", value=st.session_state.search_term, key="widget_search", on_change=update_search)
+    search = st.text_input("🔍 İsim Ara", value=st.session_state.search_term, key="widget_search", on_change=update_search)
     
     cols = ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum', 'Egilim', 'Son_Guncelleyen'] if is_admin else ['Sicil_No', 'Ad_Soyad', 'Sandik_No', 'Kurum']
     
@@ -335,6 +357,8 @@ elif menu == "📝 Veri Girişi":
     else:
         page_size = 20
         total_pages = math.ceil(len(df) / page_size)
+        
+        # Sayfa Hafızası
         if 'page_number' not in st.session_state: st.session_state.page_number = 1
         
         # --- GELİŞMİŞ NAVİGASYON ---
@@ -344,10 +368,10 @@ elif menu == "📝 Veri Girişi":
         with c3:
             if st.button("Sonraki ➡️") and st.session_state.page_number < total_pages: st.session_state.page_number += 1
         with c2:
-            # Buraya Text Input yerine Number Input koyduk, Enter'a basınca gider
-            target_page = st.number_input("Sayfa No Gir (Enter'a bas)", min_value=1, max_value=total_pages, value=st.session_state.page_number)
-            if target_page != st.session_state.page_number:
-                st.session_state.page_number = target_page
+            # Kutucuk ile gitme
+            target = st.number_input("Sayfa No:", min_value=1, max_value=total_pages, value=st.session_state.page_number)
+            if target != st.session_state.page_number:
+                st.session_state.page_number = target
                 st.rerun()
         
         start = (st.session_state.page_number - 1) * page_size
@@ -359,4 +383,7 @@ elif menu == "📝 Veri Girişi":
         idx = event.selection.rows[0]
         sicil = df_show.iloc[idx]['Sicil_No']
         g_idx = df[df['Sicil_No'] == sicil].index[0]
-        entry_form_dialog(df.iloc[g_idx], g_idx + 2, sicil, user, df.columns.tolist(), ws, ws_log, df_log)
+        row_n = g_idx + 2
+        kisi = df.iloc[g_idx]
+        
+        entry_form_dialog(kisi, row_n, sicil, user, df.columns.tolist(), ws, ws_log, df_log)
