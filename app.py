@@ -8,7 +8,7 @@ from datetime import datetime
 import time
 import math
 
-# --- SAYFA AYARLARI ---
+# --- SAYFA AYARLARI (EN BAŞTA OLMALI) ---
 st.set_page_config(
     page_title="İMO Van 2026 - Karargah", 
     layout="wide", 
@@ -36,12 +36,13 @@ def get_data():
         if len(all_data) > 1:
             headers = [h.strip() for h in all_data[0]]
             rows = all_data[1:]
+            # Boş sütun başlıklarını onar
             cleaned_headers = [h if h != "" else f"Bos_Sutun_{i}" for i, h in enumerate(headers)]
             df = pd.DataFrame(rows, columns=cleaned_headers)
         else:
             return pd.DataFrame(), None, pd.DataFrame(), None
 
-        # Sütun İsimlerini Eşleştir
+        # Sütun İsimlerini Eşleştir (Türkçe -> Kod)
         rename_map = {
             'Üniversite': 'Universite',
             'Doğum_Tarihi': 'Dogum_Yili',
@@ -132,6 +133,7 @@ def get_data():
 
         return df, ws, df_log, ws_log
     except Exception as e:
+        st.error(f"Veri çekme hatası: {e}")
         return pd.DataFrame(), None, pd.DataFrame(), None
 
 # --- GİRİŞ EKRANI ---
@@ -187,3 +189,156 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
             nk = st.selectbox("Kurum", k_opt, index=k_opt.index(kisi.get('Kurum',"")) if kisi.get('Kurum',"") in k_opt else 0)
             n24 = st.selectbox("2024", ["", "Sarı Liste", "Mavi Liste"], index=["", "Sarı Liste", "Mavi Liste"].index(get('Gecmis_2024')) if get('Gecmis_2024') in ["", "Sarı Liste", "Mavi Liste"] else 0)
             n22 = st.selectbox("2022", ["", "Sarı Liste", "Mavi Liste", "Beyaz Liste"], index=["", "Sarı Liste", "Mavi Liste", "Beyaz Liste"].index(get('Gecmis_2022')) if get('Gecmis_2022') in ["", "Sarı Liste", "Mavi Liste", "Beyaz Liste"] else 0)
+        with c2:
+            e_opt = ["", "Tüm Listemizi Yazar", "Büyük Kısmı Yazar", "Kısmen Yazar", "Karşı Tarafı Destekler", "Kararsızım"]
+            ne = st.selectbox("2026 EĞİLİMİ", e_opt, index=e_opt.index(get('Egilim')) if get('Egilim') in e_opt else 0)
+            nt = st.selectbox("Temas", ["", "Kendim Görüştüm", "Arkadaşım/Akraba Aracılığı", "Tanımıyorum"], index=["", "Kendim Görüştüm", "Arkadaşım/Akraba Aracılığı", "Tanımıyorum"].index(get('Temas_Durumu')) if get('Temas_Durumu') in ["", "Kendim Görüştüm", "Arkadaşım/Akraba Aracılığı", "Tanımıyorum"] else 0)
+            nu = st.selectbox("Ulaşım", ["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek"], index=["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek"].index(get('Ulasim')) if get('Ulasim') in ["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek"] else 0)
+
+        nn = st.text_area("Notlar", value=get('Cizikler'))
+        nr = st.text_input("Rakip Ekleme", value=get('Rakip_Ekleme'))
+        nref = st.text_input("Referans", value=get('Referans'))
+        
+        c_ex1, c_ex2 = st.columns(2)
+        n_uni = c_ex1.text_input("Üniversite Düzelt", value=kisi.get('Universite', ''))
+        n_temsil = c_ex2.text_input("Temsilcilik Düzelt", value=kisi.get('Temsilcilik', ''))
+
+        if st.form_submit_button("✅ KAYDET"):
+            updates = [
+                ("Kurum", nk), ("Gecmis_2024", n24), ("Gecmis_2022", n22),
+                ("Egilim", ne), ("Temas_Durumu", nt), ("Ulasim", nu),
+                ("Cizikler", nn), ("Rakip_Ekleme", nr), ("Referans", nref),
+                ("Universite", n_uni), ("Temsilcilik", n_temsil),
+                ("Son_Guncelleyen", user['Kullanici_Adi'])
+            ]
+            for col, val in updates:
+                target = col
+                if col == 'Universite' and 'Üniversite' in df_cols: target = 'Üniversite'
+                if col == 'Temsilcilik' and 'Temsilcilik' in df_cols: target = 'Temsilcilik'
+                if col in df_cols: ws.update_cell(row_n, df_cols.index(col)+1, val)
+                elif target in df_cols: ws.update_cell(row_n, df_cols.index(target)+1, val)
+            
+            if ws_log:
+                ws_log.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], nk, ne, n24, n22, nt, nr, nu, nn])
+            st.toast("Kaydedildi!", icon="💾")
+            time.sleep(1)
+            st.rerun()
+
+# --- ANA EKRAN ---
+user = st.session_state.user
+df, ws, df_log, ws_log = get_data()
+if df.empty:
+    st.warning("Veriler yükleniyor veya bağlantı hatası. Sayfayı yenileyin.")
+    st.stop()
+
+# --- SIDEBAR MENU ---
+menu_options = ["📝 Veri Girişi"]
+if user['Rol'] == 'ADMIN':
+    menu_options = ["📊 GENEL ANALİZ", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"]
+
+menu = st.sidebar.radio("Menü", menu_options)
+
+# =========================================================
+# 🎓 DEMOGRAFİK İSTİHBARAT (GELİŞMİŞ ANALİZ)
+# =========================================================
+if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
+    st.title("🎓 Stratejik Demografi & İstihbarat")
+    st.caption("Üyelerin üniversite, yaş ve bölgesel dağılımlarını derinlemesine inceleyin.")
+
+    tab1, tab2, tab3 = st.tabs(["🏛️ ÜNİVERSİTE ANALİZİ", "🌍 BÖLGESEL İSTİHBARAT (AĞRI, YÜKSEKOVA vb.)", "🏢 KURUMSAL İSTİHBARAT"])
+
+    # ---------------- TAB 1: ÜNİVERSİTE ANALİZİ ----------------
+    with tab1:
+        st.subheader("Üniversite Tabanlı Çözümleme")
+        
+        if 'Universite' in df.columns:
+            uni_list = sorted([u for u in df['Universite'].unique() if len(str(u)) > 2])
+            selected_uni = st.selectbox("Analiz Edilecek Üniversiteyi Seçin:", ["TÜMÜ"] + uni_list)
+            
+            if selected_uni == "TÜMÜ":
+                df_uni = df[df['Universite'].str.len() > 2]
+                title = "GENEL DAĞILIM"
+            else:
+                df_uni = df[df['Universite'] == selected_uni]
+                title = f"{selected_uni} MEZUNLARI"
+            
+            st.divider()
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Kişi Sayısı", len(df_uni))
+            if not df_uni.empty and 'Yas' in df_uni.columns:
+                avg_age = df_uni[df_uni['Yas'] > 0]['Yas'].mean()
+                c2.metric("Yaş Ortalaması", f"{int(avg_age) if not math.isnan(avg_age) else '-'}")
+            else:
+                c2.metric("Yaş Ortalaması", "-")
+            
+            top_loc = df_uni['Temsilcilik'].mode()[0] if not df_uni.empty else "-"
+            c3.metric("En Yoğun Bölge", top_loc)
+
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                st.caption(f"📊 {title} - Yaş Grupları")
+                if 'Yas_Grubu' in df_uni.columns:
+                    age_fig = px.pie(df_uni, names='Yas_Grubu', title=f"Yaş Dağılımı", hole=0.4)
+                    st.plotly_chart(age_fig, use_container_width=True)
+            
+            with col_g2:
+                st.caption(f"📍 {title} - Bölgesel Dağılım")
+                if 'Temsilcilik' in df_uni.columns:
+                    loc_fig = px.bar(df_uni['Temsilcilik'].value_counts().reset_index(), x='Temsilcilik', y='count', title="Temsilciliklere Göre Dağılım")
+                    st.plotly_chart(loc_fig, use_container_width=True)
+
+            with st.expander(f"📋 {title} Listesini Görüntüle"):
+                st.dataframe(df_uni[['Sicil_No', 'Ad_Soyad', 'Yas', 'Temsilcilik', 'Kurum']], use_container_width=True)
+
+    # ---------------- TAB 2: BÖLGESEL DERİNLİK (ÖNEMLİ: AĞRI / YÜKSEKOVA AYRIMI) ----------------
+    with tab2:
+        st.subheader("🌍 Bölgesel Derin İstihbarat")
+        st.info("Buradan Ağrı, Yüksekova, Erciş gibi bölgeleri seçip o bölgenin röntgenini çekebilirsiniz.")
+        
+        all_locs = sorted([l for l in df['Temsilcilik'].unique() if len(str(l))>2])
+        # Varsayılan seçim yoksa listenin başını al
+        target_region = st.selectbox("📍 Mercek Altına Alınacak Bölgeyi Seçin:", all_locs)
+        
+        if target_region:
+            # Sadece seçilen bölgeyi filtrele (Örn: AĞRI TEMSİLCİLİĞİ)
+            df_reg = df[df['Temsilcilik'] == target_region]
+            
+            # --- KPI ---
+            c_r1, c_r2, c_r3 = st.columns(3)
+            c_r1.metric("Bölgedeki Üye Sayısı", len(df_reg))
+            
+            valid_ages = df_reg[df_reg['Yas'] > 0]['Yas']
+            avg_reg_age = int(valid_ages.mean()) if not valid_ages.empty else "-"
+            c_r2.metric("Bölge Yaş Ortalaması", avg_reg_age)
+            
+            top_uni = df_reg['Universite'].mode()[0] if not df_reg.empty else "-"
+            c_r3.metric("Bölgeye Hakim Üniversite", top_uni)
+            
+            st.divider()
+            
+            # --- 3'LÜ GRAFİK ANALİZİ ---
+            col_d1, col_d2, col_d3 = st.columns(3)
+            
+            # 1. Üniversite Dağılımı
+            with col_d1:
+                st.markdown("**🎓 Hangi Okul Hakim?**")
+                if not df_reg.empty:
+                    uni_counts = df_reg[df_reg['Universite'].str.len()>2]['Universite'].value_counts().head(7).reset_index()
+                    if not uni_counts.empty:
+                        fig_ru = px.bar(uni_counts, x='count', y='Universite', orientation='h', text_auto=True, height=350)
+                        fig_ru.update_layout(yaxis={'categoryorder':'total ascending'}, margin=dict(l=0, r=0, t=0, b=0))
+                        st.plotly_chart(fig_ru, use_container_width=True)
+                    else: st.warning("Veri yok")
+                
+            # 2. Yaş Dağılımı
+            with col_d2:
+                st.markdown("**👶/👴 Genç mi Yaşlı mı?**")
+                if not df_reg.empty:
+                    fig_ra = px.pie(df_reg, names='Yas_Grubu', hole=0.4, height=350)
+                    fig_ra.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+                    st.plotly_chart(fig_ra, use_container_width=True)
+                
+            # 3. Kurum Dağılımı
+            with col_d3:
+                st.markdown("**🏢 Kurumsal Yap
