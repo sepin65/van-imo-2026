@@ -25,7 +25,7 @@ def get_connection():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. VERİLERİ ÇEK ---
+# --- 2. VERİLERİ ÇEK (AKILLI DÜZELTME MODU) ---
 def get_data():
     client = get_connection()
     try:
@@ -37,49 +37,71 @@ def get_data():
         
         if len(all_data) > 1:
             headers = all_data[0]
+            # Başlıklardaki boşlukları temizle
+            headers = [h.strip() for h in headers]
             rows = all_data[1:]
-            # Boş sütun başlıklarını temizle
-            cleaned_headers = [h if h.strip() != "" else f"Bos_Sutun_{i}" for i, h in enumerate(headers)]
+            
+            # Boş başlıkları "Bos_Sutun" olarak adlandır
+            cleaned_headers = [h if h != "" else f"Bos_Sutun_{i}" for i, h in enumerate(headers)]
             df = pd.DataFrame(rows, columns=cleaned_headers)
         else:
-            df = pd.DataFrame()
+            return pd.DataFrame(), None, pd.DataFrame(), None
 
-        # Sütun Temizliği
-        df.columns = df.columns.str.strip()
-        df = df.astype(str)
-        
-        # YENİ SÜTUNLAR EKLENDİ: Universite, Dogum_Yili, Temsilcilik
+        # --- KRİTİK DÜZELTME: SÜTUN İSİMLERİNİ EŞLEŞTİRME ---
+        # Excel'deki Türkçe isimleri, kodun beklediği İngilizce isimlere çeviriyoruz
+        rename_map = {
+            'Üniversite': 'Universite',
+            'Doğum_Tarihi': 'Dogum_Yili', # Tarihi alıp yılı biz çekeceğiz
+            'Dogum_Tarihi': 'Dogum_Yili',
+            'Eğilim': 'Egilim',
+            'Ulaşım': 'Ulasim'
+        }
+        df.rename(columns=rename_map, inplace=True)
+
+        # Eksik sütunları oluştur (Hata vermemesi için)
         required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon', 'Universite', 'Dogum_Yili', 'Temsilcilik']
         for col in required_cols:
             if col not in df.columns:
                 df[col] = ""
 
-        # Sicil Temizleme
-        def clean_sicil(x):
-            try:
-                return int(str(x).replace(".", "").replace(" ", ""))
-            except:
-                return 999999 
-        df['Sicil_Int'] = df['Sicil_No'].apply(clean_sicil)
-        df = df.sort_values(by='Sicil_Int')
+        # --- VERİ TEMİZLİĞİ VE DÖNÜŞÜMLER ---
+
+        # 1. TEMSİLCİLİK DÜZELTME (Otomatik VAN MERKEZ yapma)
+        def fix_location(x):
+            x = str(x).strip()
+            if x in ["-", "", "None", "nan"] or len(x) < 3:
+                return "VAN MERKEZ"
+            return x.upper() # Hepsini büyük harf yap
         
-        # Yaş Hesaplama (Hata Korumalı)
+        df['Temsilcilik'] = df['Temsilcilik'].apply(fix_location)
+
+        # 2. ÜNİVERSİTE DÜZELTME
+        df['Universite'] = df['Universite'].str.upper().str.strip()
+
+        # 3. YAŞ HESAPLAMA (Tarihten Yıl Çıkarma: 11/02/1947 -> 1947)
         current_year = datetime.now().year
-        def calculate_age(year):
+        
+        def extract_age_from_date(val):
+            val = str(val).strip()
+            year = 0
             try:
-                y_str = str(year).strip()
-                if not y_str.isdigit(): return 0
-                y = int(y_str)
-                if 1940 < y < current_year: return current_year - y
+                # Eğer format 11/02/1947 veya 11.02.1947 ise
+                if "/" in val:
+                    year = int(val.split("/")[-1])
+                elif "." in val:
+                    year = int(val.split(".")[-1])
+                elif len(val) == 4 and val.isdigit(): # Sadece yıl yazılmışsa
+                    year = int(val)
+                
+                if 1930 < year < current_year:
+                    return current_year - year
                 return 0
             except:
                 return 0
         
-        if 'Dogum_Yili' in df.columns:
-            df['Yas'] = df['Dogum_Yili'].apply(calculate_age)
-        else:
-            df['Yas'] = 0
-        
+        # 'Dogum_Yili' sütunu aslında tarihi tutuyor, onu yaşa çeviriyoruz
+        df['Yas'] = df['Dogum_Yili'].apply(extract_age_from_date)
+
         # Yaş Gruplama
         def group_age(age):
             if age == 0: return "Belirsiz"
@@ -88,19 +110,28 @@ def get_data():
             if age < 50: return "40-49 (Olgun)"
             if age < 60: return "50-59 (Kıdemli)"
             return "60+ (Duayen)"
-            
+        
         df['Yas_Grubu'] = df['Yas'].apply(group_age)
 
-        # Sandık Atama
+        # 4. SİCİL NO TEMİZLİĞİ
+        def clean_sicil(x):
+            try:
+                return int(str(x).replace(".", "").replace(" ", ""))
+            except:
+                return 999999 
+        df['Sicil_Int'] = df['Sicil_No'].apply(clean_sicil)
+        df = df.sort_values(by='Sicil_Int')
+        
+        # 5. SANDIK ATAMA
         try:
             df['Sandik_No'] = pd.qcut(df['Sicil_Int'].rank(method='first'), q=6, labels=[
-                "1. Sandık (Kıdemliler)", "2. Sandık", "3. Sandık", 
-                "4. Sandık", "5. Sandık", "6. Sandık (Gençler)"
+                "1. Sandık (En Kıdemliler)", "2. Sandık", "3. Sandık", 
+                "4. Sandık", "5. Sandık", "6. Sandık (En Gençler)"
             ])
         except:
             df['Sandik_No'] = "Belirsiz"
 
-        # --- LOG KAYITLARI ---
+        # --- LOG VERİLERİNİ ÇEK ---
         try:
             ws_log = sheet.worksheet("log_kayitlari")
         except:
@@ -127,7 +158,6 @@ def get_data():
 
         return df, ws, df_log, ws_log
     except Exception as e:
-        # Hata durumunda boş veri dön
         return pd.DataFrame(), None, pd.DataFrame(), None
 
 # --- SAYAÇ ---
@@ -166,24 +196,29 @@ if st.session_state.user is None:
 @st.dialog("✏️ SEÇMEN KARTI")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
-    # Demografik Bilgi Gösterimi (Güvenli)
+    
+    # Bilgi Gösterimi
     yas = kisi.get('Yas', 0)
-    uni = kisi.get('Universite', '-')
-    temsil = kisi.get('Temsilcilik', 'Merkez')
-    st.caption(f"🎓 {uni} | 🎂 {yas if yas > 0 else '?'} Yaş | 📍 {temsil}")
+    uni = kisi.get('Universite', '')
+    temsil = kisi.get('Temsilcilik', 'VAN MERKEZ')
+    
+    c_info1, c_info2, c_info3 = st.columns(3)
+    c_info1.info(f"📍 **{temsil}**")
+    c_info2.info(f"🎓 **{uni if len(uni)>2 else 'Belirtilmemiş'}**")
+    c_info3.info(f"🎂 **{int(yas) if yas > 0 else '?'} Yaş**")
     
     is_admin = (user['Rol'] == 'ADMIN')
     def get(f): return kisi.get(f, "") if is_admin else ""
 
     # Geçmiş Tablosu
-    st.info("🕒 **Seçmen Hafızası:**")
+    st.markdown("##### 🕒 Seçmen Hafızası")
     found = False
     if df_log is not None and not df_log.empty and 'Sicil_No' in df_log.columns:
         logs = df_log[df_log['Sicil_No'].astype(str).str.strip() == str(sicil).strip()]
         if not logs.empty:
             found = True
-            st.dataframe(logs[['Zaman','Kullanici','Egilim','Cizikler']].sort_values('Zaman', ascending=False), hide_index=True)
-    if not found: st.caption("Kayıt yok.")
+            st.dataframe(logs[['Zaman','Kullanici','Egilim','Cizikler']].sort_values('Zaman', ascending=False), hide_index=True, use_container_width=True)
+    if not found: st.caption("Henüz kayıt girilmemiş.")
     st.divider()
     
     with st.form("form"):
@@ -203,12 +238,10 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
         nr = st.text_input("Rakip Ekleme", value=get('Rakip_Ekleme'))
         nref = st.text_input("Referans", value=get('Referans'))
         
-        # Telefon & Üniversite Güncelleme
-        c_extra1, c_extra2 = st.columns(2)
-        with c_extra1:
-             n_uni = st.text_input("Üniversite (Düzeltme)", value=kisi.get('Universite', ''))
-        with c_extra2:
-             n_temsil = st.text_input("Temsilcilik/İlçe", value=kisi.get('Temsilcilik', ''))
+        # Hızlı Düzenleme
+        c_ex1, c_ex2 = st.columns(2)
+        n_uni = c_ex1.text_input("Üniversite (Düzelt)", value=kisi.get('Universite', ''))
+        n_temsil = c_ex2.text_input("Temsilcilik (Düzelt)", value=kisi.get('Temsilcilik', ''))
 
         if st.form_submit_button("✅ KAYDET"):
             updates = [
@@ -219,107 +252,92 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
                 ("Son_Guncelleyen", user['Kullanici_Adi'])
             ]
             for col, val in updates:
-                if col in df_cols: ws.update_cell(row_n, df_cols.index(col)+1, val)
+                # Kolon ismini tekrar kontrol et (Excel'de Türkçe olabilir)
+                target_col = col
+                if col == 'Universite' and 'Üniversite' in df_cols: target_col = 'Üniversite'
+                if col == 'Temsilcilik' and 'Temsilcilik' in df_cols: target_col = 'Temsilcilik'
+                
+                # Excel'de kolon varsa güncelle
+                if col in df_cols: 
+                    ws.update_cell(row_n, df_cols.index(col)+1, val)
+                # Alternatif isimlerle kontrol (Türkçe karakter)
+                elif target_col in df_cols:
+                    ws.update_cell(row_n, df_cols.index(target_col)+1, val)
             
             if ws_log:
                 ws_log.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], nk, ne, n24, n22, nt, nr, nu, nn])
             st.toast("Kaydedildi!", icon="💾")
+            time.sleep(1)
+            st.rerun()
 
 # --- 5. ANA EKRAN ---
 user = st.session_state.user
 df, ws, df_log, ws_log = get_data()
 
-# Eğer veri çekilemediyse durdur
 if df.empty:
-    st.warning("Veriler yükleniyor veya bağlantı hatası. Lütfen sayfayı yenileyin.")
+    st.warning("Veriler yükleniyor... (Eğer uzun sürerse sayfayı yenileyin)")
     st.stop()
 
 menu = st.sidebar.radio("Menü", ["📊 ANALİZ RAPORU", "🎓 DEMOGRAFİK ANALİZ", "📝 Veri Girişi"] if user['Rol']=='ADMIN' else ["📝 Veri Girişi"])
 
 # =========================================================
-# DEMOGRAFİK ANALİZ (ZIRHLI VERSİYON)
+# DEMOGRAFİK ANALİZ
 # =========================================================
 if menu == "🎓 DEMOGRAFİK ANALİZ":
     st.title("🎓 Stratejik Demografi Analizi")
-    st.info("Bu ekran, elinizdeki üniversite, yaş ve temsilcilik verilerini analiz eder.")
 
-    tab1, tab2, tab3 = st.tabs(["🏛️ ÜNİVERSİTE LOBİSİ", "👶/👴 KUŞAK ANALİZİ", "📍 TEMSİLCİLİKLER"])
+    tab1, tab2, tab3 = st.tabs(["🏛️ ÜNİVERSİTE LOBİSİ", "👶/👴 KUŞAK ANALİZİ", "📍 BÖLGESEL GÜÇ"])
 
     with tab1:
-        st.subheader("Hangi Okul Mezunları Çoğunlukta?")
-        if 'Universite' in df.columns:
-            uni_df = df[df['Universite'].str.len() > 2]
-            if not uni_df.empty:
-                uni_counts = uni_df['Universite'].value_counts().reset_index()
-                uni_counts.columns = ['Üniversite', 'Kişi Sayısı']
-                
-                c1, c2 = st.columns([2, 1])
-                with c1:
-                    fig_uni = px.bar(uni_counts.head(15), x='Kişi Sayısı', y='Üniversite', orientation='h', title="Top 15 Üniversite", text_auto=True)
-                    fig_uni.update_layout(yaxis={'categoryorder':'total ascending'})
-                    st.plotly_chart(fig_uni, use_container_width=True)
-                with c2:
-                    st.dataframe(uni_counts, use_container_width=True)
-            else:
-                st.warning("Henüz üniversite verisi girilmemiş.")
+        st.subheader("Üniversite Mezun Dağılımı")
+        uni_df = df[df['Universite'].str.len() > 2]
+        if not uni_df.empty:
+            uni_counts = uni_df['Universite'].value_counts().reset_index()
+            uni_counts.columns = ['Üniversite', 'Kişi Sayısı']
+            fig_uni = px.bar(uni_counts.head(15), x='Kişi Sayısı', y='Üniversite', orientation='h', title="Top 15 Üniversite", text_auto=True)
+            fig_uni.update_layout(yaxis={'categoryorder':'total ascending'})
+            st.plotly_chart(fig_uni, use_container_width=True)
         else:
-            st.error("'Universite' sütunu eksik.")
+            st.warning("⚠️ Üniversite verisi okunamadı. Excel'de 'Üniversite' başlığı olduğundan emin olun.")
 
     with tab2:
-        st.subheader("Üye Yaş Dağılımı")
-        if 'Yas_Grubu' in df.columns:
-            age_counts = df['Yas_Grubu'].value_counts().reset_index()
-            age_counts.columns = ['Yaş Grubu', 'Kişi Sayısı']
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                fig_age = px.pie(age_counts, names='Yaş Grubu', values='Kişi Sayısı', title="Kuşak Dağılımı", hole=0.4)
-                st.plotly_chart(fig_age, use_container_width=True)
-            with c2:
-                # --- HATA DÜZELTİLEN KISIM ---
-                valid_ages = df[df['Yas'] > 0]['Yas']
-                if not valid_ages.empty:
-                    avg_age = valid_ages.mean()
-                    st.metric("Oda Yaş Ortalaması", f"{int(avg_age)}")
-                else:
-                    st.metric("Oda Yaş Ortalaması", "Veri Yok")
-                # -----------------------------
-                st.markdown("""
-                * **Genç:** 20-30 | **Dinamik:** 30-40
-                * **Olgun:** 40-50 | **Kıdemli:** 50+
-                """)
-        else:
-            st.warning("Yaş verisi hesaplanamadı.")
+        st.subheader("Yaş Grupları")
+        age_counts = df['Yas_Grubu'].value_counts().reset_index()
+        age_counts.columns = ['Yaş Grubu', 'Kişi Sayısı']
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_age = px.pie(age_counts, names='Yaş Grubu', values='Kişi Sayısı', title="Kuşak Dağılımı", hole=0.4)
+            st.plotly_chart(fig_age, use_container_width=True)
+        with c2:
+            valid_ages = df[df['Yas'] > 0]['Yas']
+            if not valid_ages.empty:
+                st.metric("Oda Yaş Ortalaması", f"{int(valid_ages.mean())}")
+            else:
+                st.metric("Oda Yaş Ortalaması", "Hesaplanamadı")
+            st.info("Yaş verisi 'Doğum_Tarihi' sütunundan (Örn: 11/02/1947) otomatik çekilmiştir.")
 
     with tab3:
-        st.subheader("Bölgesel Dağılım")
-        if 'Temsilcilik' in df.columns:
-            rep_df = df[df['Temsilcilik'].str.len() > 2]
-            if not rep_df.empty:
-                rep_counts = rep_df['Temsilcilik'].value_counts().reset_index()
-                rep_counts.columns = ['Bölge', 'Üye Sayısı']
-                fig_rep = px.bar(rep_counts, x='Bölge', y='Üye Sayısı', color='Üye Sayısı', title="İlçe Gücü")
-                st.plotly_chart(fig_rep, use_container_width=True)
-            else:
-                st.warning("Temsilcilik verisi girilmemiş.")
+        st.subheader("Bölgesel (Temsilcilik) Dağılımı")
+        rep_counts = df['Temsilcilik'].value_counts().reset_index()
+        rep_counts.columns = ['Bölge', 'Üye Sayısı']
+        fig_rep = px.bar(rep_counts, x='Bölge', y='Üye Sayısı', color='Üye Sayısı', title="İlçe Gücü")
+        st.plotly_chart(fig_rep, use_container_width=True)
 
 # =========================================================
-# ANALİZ RAPORU (ESKİ EKRAN - AYNEN KORUNDU)
+# ANALİZ RAPORU
 # =========================================================
 elif menu == "📊 ANALİZ RAPORU":
     st.title("📊 Genel Durum")
     temas = df[df['Egilim'].str.len() > 1]
     bizimkiler = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
-    hedef_oy = int(len(df) / 2) + 1
     
     c1, c2, c3 = st.columns(3)
     c1.metric("Toplam Üye", len(df))
     c2.metric("Temas Edilen", len(temas))
     c3.metric("Bizim Oylar", len(bizimkiler))
-    
     st.divider()
     
-    # Kısaltılmış Analiz Görünümü
     c_pie, c_bar = st.columns(2)
     with c_pie:
         if not temas.empty:
@@ -328,7 +346,6 @@ elif menu == "📊 ANALİZ RAPORU":
         k_counts = bizimkiler['Kurum'].value_counts().reset_index()
         k_counts.columns = ['Kurum', 'Oylar']
         st.plotly_chart(px.bar(k_counts.head(10), x='Oylar', y='Kurum', orientation='h', title='En Güçlü Olduğumuz Kurumlar'), use_container_width=True)
-
 
 # =========================================================
 # VERİ GİRİŞİ
@@ -339,11 +356,11 @@ elif menu == "📝 Veri Girişi":
     def update_search(): st.session_state.search_term = st.session_state.widget_search
     search = st.text_input("🔍 İsim Ara", value=st.session_state.search_term, key="widget_search", on_change=update_search)
     
-    # Sütunları güvenli şekilde seç
-    available_cols = df.columns.tolist()
-    desired_cols = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Temsilcilik', 'Kurum', 'Egilim', 'Son_Guncelleyen']
-    final_cols = [c for c in desired_cols if c in available_cols]
-    
+    # Sütun seçimi (Güvenli)
+    cols = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Temsilcilik', 'Kurum', 'Egilim', 'Son_Guncelleyen']
+    # Mevcut olanları göster
+    final_cols = [c for c in cols if c in df.columns]
+
     if search:
         df_show = df[df['Ad_Soyad'].str.contains(search, case=False, na=False)]
     else:
