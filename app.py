@@ -42,10 +42,9 @@ def get_data():
         else:
             return pd.DataFrame(), None, pd.DataFrame(), None
 
-        # Sütun İsimlerini Eşleştir (Excel Başlıkları -> Kod Değişkenleri)
         rename_map = {
             'Üniversite': 'Universite',
-            'Doğum_Tarihi': 'Dogum_Tarihi', # Excel'deki tam başlık
+            'Doğum_Tarihi': 'Dogum_Tarihi',
             'Eğilim': 'Egilim',
             'Ulaşım': 'Ulasim',
             'Temsilcilik': 'Temsilcilik',
@@ -65,36 +64,20 @@ def get_data():
         df['Temsilcilik'] = df['Temsilcilik'].apply(fix_location)
         df['Universite'] = df['Universite'].str.upper().str.strip()
 
-        # --- GELİŞMİŞ YAŞ HESAPLAMA (GÜN/AY/YIL FORMATI İÇİN) ---
         current_year = datetime.now().year
-        
         def calculate_age_robust(date_str):
             date_str = str(date_str).strip()
-            if not date_str or date_str in ["-", "nan", "None", ""]: return 0
-            
+            if not date_str or date_str in ["-", "nan", "None"]: return 0
             try:
-                # 1. Format: 11/02/1947 (Excel'deki format)
-                if "/" in date_str:
-                    dt = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
-                    if pd.notnull(dt): return current_year - dt.year
-                
-                # 2. Format: 11.02.1947
-                elif "." in date_str:
-                    dt = pd.to_datetime(date_str, dayfirst=True, format="%d.%m.%Y", errors='coerce')
-                    if pd.notnull(dt): return current_year - dt.year
-                
-                # 3. Format: Sadece Yıl (1985)
-                elif len(date_str) == 4 and date_str.isdigit():
-                    return current_year - int(date_str)
-                
+                if "/" in date_str: dt = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+                elif "." in date_str: dt = pd.to_datetime(date_str, dayfirst=True, format="%d.%m.%Y", errors='coerce')
+                elif len(date_str) == 4 and date_str.isdigit(): return current_year - int(date_str)
+                else: return 0
+                if pd.notnull(dt): return current_year - dt.year
                 return 0
-            except:
-                return 0
-
-        # Hesaplamayı Uygula
+            except: return 0
         df['Yas'] = df['Dogum_Tarihi'].apply(calculate_age_robust)
 
-        # Yaş Gruplama (5 Yıllık)
         def group_age(age):
             if age == 0: return "Belirsiz"
             if age < 25: return "20-24"
@@ -109,7 +92,6 @@ def get_data():
             return "65+"
         df['Yas_Grubu'] = df['Yas'].apply(group_age)
 
-        # Tanınma Durumu
         df['Taninma_Durumu'] = df['Taniyanlar'].apply(lambda x: "Referanslı ✅" if len(str(x)) > 2 else "Kör Nokta (Tanınmıyor) ❌")
 
         def clean_sicil(x):
@@ -151,7 +133,6 @@ def get_data():
         return df, ws, df_log, ws_log
 
     except Exception as e:
-        st.error(f"Hata: {e}")
         return pd.DataFrame(), None, pd.DataFrame(), None
 
 # --- GİRİŞ EKRANI ---
@@ -179,7 +160,6 @@ if st.session_state.user is None:
 @st.dialog("✏️ SEÇMEN KARTI")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
-    
     yas = kisi.get('Yas', 0)
     uni = kisi.get('Universite', '')
     temsil = kisi.get('Temsilcilik', 'VAN MERKEZ')
@@ -255,68 +235,94 @@ if df.empty:
 menu = st.sidebar.radio("Menü", ["📊 GENEL ANALİZ", "📉 'KÖR NOKTA' ANALİZİ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"] if user['Rol']=='ADMIN' else ["📝 Veri Girişi"])
 
 # =========================================================
-# 📉 KÖR NOKTA ANALİZİ (YÜZDESEL VE DÜZELTİLMİŞ)
+# 📉 KÖR NOKTA ANALİZİ (BÖLGESEL SEÇMELİ)
 # =========================================================
 if menu == "📉 'KÖR NOKTA' ANALİZİ" and user['Rol'] == 'ADMIN':
     st.title("📉 'Kör Nokta' ve Erişim Riski Analizi")
-    st.info("Bu ekran, 'Tanıyanlar' sütunu BOŞ olan üyeler üzerinden analiz yapar.")
-
-    df_untouched = df[df['Taninma_Durumu'] == "Kör Nokta (Tanınmıyor) ❌"]
     
-    total = len(df)
+    # 1. BÖLGE SEÇİM KUTUSU
+    region_list = ["TÜMÜ"] + sorted(df['Temsilcilik'].unique().tolist())
+    selected_region = st.selectbox("📍 Analiz Edilecek Bölgeyi Seçin:", region_list)
+
+    # 2. VERİYİ FİLTRELE
+    if selected_region != "TÜMÜ":
+        df_analysis = df[df['Temsilcilik'] == selected_region]
+        st.info(f"📊 Şu an sadece **{selected_region}** verileri analiz ediliyor.")
+    else:
+        df_analysis = df
+        st.info("📊 Tüm bölgeler analiz ediliyor.")
+
+    # 3. ANALİZ BAŞLIYOR (Filtrelenmiş Veri İle)
+    df_untouched = df_analysis[df_analysis['Taninma_Durumu'] == "Kör Nokta (Tanınmıyor) ❌"]
+    
+    total = len(df_analysis)
     untouched = len(df_untouched)
     ratio = int((untouched / total) * 100) if total > 0 else 0
     
     c1, c2, c3 = st.columns(3)
-    c1.metric("Toplam Üye", total)
+    c1.metric(f"Toplam Üye ({selected_region})", total)
     c2.metric("Sahipsiz (Kör Nokta)", untouched, f"%{ratio} RİSK", delta_color="inverse")
     c3.metric("Referanslı Üye", total - untouched, f"%{100-ratio} GÜVENLİ")
     
     st.divider()
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📍 BÖLGESEL RİSK", "🎓 AKADEMİK RİSK", "👶/👴 KUŞAK RİSKİ", "📋 HEDEF LİSTE"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📍 BÖLGESEL DAĞILIM", "🎓 AKADEMİK RİSK", "👶/👴 KUŞAK RİSKİ", "📋 HEDEF LİSTE"])
 
-    # TAB 1: BÖLGESEL RİSK (ORANSAL)
+    # TAB 1: BÖLGESEL (Eğer TÜMÜ ise karşılaştırma, değilse tekil durum)
     with tab1:
         st.subheader("Bölgelere Göre Tanınmama Oranı")
-        total_counts = df['Temsilcilik'].value_counts().reset_index()
-        total_counts.columns = ['Bölge', 'Toplam']
-        untouched_counts = df_untouched['Temsilcilik'].value_counts().reset_index()
-        untouched_counts.columns = ['Bölge', 'Taninmayan']
         
-        merged = pd.merge(total_counts, untouched_counts, on='Bölge', how='left').fillna(0)
-        merged['Oran'] = (merged['Taninmayan'] / merged['Toplam'] * 100).astype(int)
-        merged['Etiket'] = merged.apply(lambda x: f"{int(x['Taninmayan'])} Kişi (%{x['Oran']} Açık)", axis=1)
-        merged = merged.sort_values('Oran', ascending=False)
-        
-        fig_loc = px.bar(merged, x='Oran', y='Bölge', text='Etiket', 
-                         title="Hangi Bölgede Ne Kadar Eksiğimiz Var? (%)",
-                         color='Oran', color_continuous_scale='Reds')
-        st.plotly_chart(fig_loc, use_container_width=True)
+        if selected_region == "TÜMÜ":
+            # Tüm bölgeleri karşılaştır
+            total_counts = df_analysis['Temsilcilik'].value_counts().reset_index()
+            total_counts.columns = ['Bölge', 'Toplam']
+            untouched_counts = df_untouched['Temsilcilik'].value_counts().reset_index()
+            untouched_counts.columns = ['Bölge', 'Taninmayan']
+            
+            merged = pd.merge(total_counts, untouched_counts, on='Bölge', how='left').fillna(0)
+            merged['Oran'] = (merged['Taninmayan'] / merged['Toplam'] * 100).astype(int)
+            merged['Etiket'] = merged.apply(lambda x: f"{int(x['Taninmayan'])} Kişi (%{x['Oran']} Açık)", axis=1)
+            merged = merged.sort_values('Oran', ascending=False)
+            
+            fig_loc = px.bar(merged, x='Oran', y='Bölge', text='Etiket', 
+                             title="Bölgesel Risk Haritası",
+                             color='Oran', color_continuous_scale='Reds')
+            st.plotly_chart(fig_loc, use_container_width=True)
+        else:
+            # Tek Bölge Grafiği (Pasta)
+            labels = ['Tanınmıyor (Risk)', 'Tanınıyor (Güvenli)']
+            values = [untouched, total - untouched]
+            fig_pie = px.pie(values=values, names=labels, title=f"{selected_region} Erişim Durumu", 
+                             color=labels, color_discrete_map={'Tanınmıyor (Risk)':'red', 'Tanınıyor (Güvenli)':'green'}, hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
 
-    # TAB 2: AKADEMİK RİSK
+    # TAB 2: AKADEMİK RİSK (Filtreli)
     with tab2:
-        st.subheader("Üniversitelere Göre Tanınmama Oranı")
-        uni_total = df[df['Universite'].str.len()>2]['Universite'].value_counts().reset_index()
+        st.subheader(f"{selected_region} - Üniversite Bazlı Risk")
+        
+        uni_total = df_analysis[df_analysis['Universite'].str.len()>2]['Universite'].value_counts().reset_index()
         uni_total.columns = ['Üniversite', 'Toplam']
-        uni_total = uni_total.head(20)
+        uni_total = uni_total.head(15)
+        
         uni_untouched = df_untouched[df_untouched['Universite'].str.len()>2]['Universite'].value_counts().reset_index()
         uni_untouched.columns = ['Üniversite', 'Taninmayan']
         
         merged_uni = pd.merge(uni_total, uni_untouched, on='Üniversite', how='left').fillna(0)
         merged_uni['Oran'] = (merged_uni['Taninmayan'] / merged_uni['Toplam'] * 100).astype(int)
-        merged_uni['Etiket'] = merged_uni.apply(lambda x: f"%{x['Oran']}", axis=1)
+        merged_uni['Etiket'] = merged_uni.apply(lambda x: f"%{x['Oran']} ({int(x['Taninmayan'])})", axis=1)
         
-        fig_uni = px.bar(merged_uni.sort_values('Oran', ascending=False), x='Oran', y='Üniversite', text='Etiket',
-                         color='Oran', color_continuous_scale='Oranges')
-        st.plotly_chart(fig_uni, use_container_width=True)
+        if not merged_uni.empty:
+            fig_uni = px.bar(merged_uni.sort_values('Oran', ascending=False), x='Oran', y='Üniversite', text='Etiket',
+                             color='Oran', color_continuous_scale='Oranges')
+            st.plotly_chart(fig_uni, use_container_width=True)
+        else:
+            st.info("Bu filtrede yeterli veri yok.")
 
-    # TAB 3: KUŞAK RİSKİ (DÜZELTİLMİŞ)
+    # TAB 3: KUŞAK RİSKİ (Filtreli)
     with tab3:
-        st.subheader("Yaş Gruplarında Kör Noktalar")
+        st.subheader(f"{selected_region} - Yaş Grubu Bazlı Risk")
         
-        # Sadece yaşı belli olanları analiz et (0 olanları at)
-        df_valid = df[df['Yas'] > 18]
+        df_valid = df_analysis[df_analysis['Yas'] > 18]
         df_valid_untouched = df_untouched[df_untouched['Yas'] > 18]
         
         if not df_valid_untouched.empty:
@@ -328,9 +334,8 @@ if menu == "📉 'KÖR NOKTA' ANALİZİ" and user['Rol'] == 'ADMIN':
             
             merged_age = pd.merge(age_total, age_untouched, on='Grup', how='left').fillna(0)
             merged_age['Oran'] = (merged_age['Taninmayan'] / merged_age['Toplam'] * 100).astype(int)
-            merged_age['Etiket'] = merged_age.apply(lambda x: f"%{x['Oran']} Kayıp", axis=1)
+            merged_age['Etiket'] = merged_age.apply(lambda x: f"%{x['Oran']}", axis=1)
             
-            # Sıralama
             age_order = ["20-24", "25-29", "30-34", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65+"]
             merged_age['Grup'] = pd.Categorical(merged_age['Grup'], categories=age_order, ordered=True)
             merged_age = merged_age.sort_values('Grup')
@@ -338,17 +343,18 @@ if menu == "📉 'KÖR NOKTA' ANALİZİ" and user['Rol'] == 'ADMIN':
             fig_age = px.bar(merged_age, x='Grup', y='Oran', text='Etiket', color='Oran', title="Yaş Gruplarına Göre Tanınmama Oranı")
             st.plotly_chart(fig_age, use_container_width=True)
         else:
-            st.warning("Yaş verisi hesaplanamadı veya eksik.")
+            st.warning("Bu bölge için yaş verisi yetersiz.")
 
-    # TAB 4: HEDEF LİSTESİ
+    # TAB 4: HEDEF LİSTESİ (Filtreli)
     with tab4:
-        st.subheader("🎯 Nokta Atışı Görev Listesi")
+        st.subheader(f"🎯 {selected_region} İçin Hedef Liste")
+        st.caption("Bu liste, seçili bölgedeki REFERANSI OLMAYAN üyeleri gösterir.")
+        
         c_f1, c_f2 = st.columns(2)
-        fil_loc = c_f1.multiselect("Bölge Seç:", df_untouched['Temsilcilik'].unique())
-        fil_uni = c_f2.multiselect("Üniversite Seç:", df_untouched['Universite'].unique())
+        # Filtreler artık sadece seçili bölgenin verilerini içerir
+        fil_uni = c_f2.multiselect("Üniversiteye Göre Daralt:", df_untouched['Universite'].unique())
         
         df_target = df_untouched.copy()
-        if fil_loc: df_target = df_target[df_target['Temsilcilik'].isin(fil_loc)]
         if fil_uni: df_target = df_target[df_target['Universite'].isin(fil_uni)]
         
         st.dataframe(df_target[['Sicil_No', 'Ad_Soyad', 'Telefon', 'Temsilcilik', 'Kurum', 'Universite']], use_container_width=True)
@@ -429,10 +435,7 @@ elif menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
 # =========================================================
 elif menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
     st.title("🎓 Stratejik Demografi")
-    # 0 yaş hariç
-    df_valid_age = df[df['Yas'] > 18]
     tab1, tab2, tab3 = st.tabs(["🏛️ ÜNİVERSİTE", "🌍 BÖLGESEL", "🏢 KURUMSAL"])
-    
     with tab1:
         if 'Universite' in df.columns:
             uni_list = sorted([u for u in df['Universite'].unique() if len(str(u)) > 2])
@@ -443,10 +446,8 @@ elif menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
             val_ages = df_uni[df_uni['Yas']>18]['Yas']
             c2.metric("Yaş Ort.", int(val_ages.mean()) if not val_ages.empty else "-")
             c3.metric("Bölge", df_uni['Temsilcilik'].mode()[0] if not df_uni.empty else "-")
-            
             c_g1, c_g2 = st.columns(2)
             with c_g1:
-                # Yaş grubu düzeltmesi
                 df_pie = df_uni[df_uni['Yas'] > 18]
                 if not df_pie.empty:
                     age_labels = ["20-24", "25-29", "30-34", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65+"]
