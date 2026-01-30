@@ -38,6 +38,7 @@ def get_data():
         if len(all_data) > 1:
             headers = [h.strip() for h in all_data[0]]
             rows = all_data[1:]
+            # Boş sütun başlıklarını onar
             cleaned_headers = [h if h != "" else f"Bos_Sutun_{i}" for i, h in enumerate(headers)]
             df = pd.DataFrame(rows, columns=cleaned_headers)
         else:
@@ -90,7 +91,7 @@ def get_data():
 
         df['Yas'] = df['Dogum_Tarihi'].apply(calculate_age_robust)
 
-        # --- YENİ YAŞ GRUPLAMA (5 YILLIK DİLİMLER) ---
+        # 5 YILLIK YAŞ GRUPLAMA
         def group_age(age):
             if age == 0: return "Belirsiz"
             if age < 25: return "20-24"
@@ -189,7 +190,7 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     c3.info(f"🎂 **{int(yas) if yas > 0 else '?'} Yaş**")
     
     if len(str(taniyan)) > 1:
-        st.warning(f"🔗 **Tanıyanlar:** {taniyan}")
+        st.warning(f"🔗 **Referans / Tanıyan:** {taniyan}")
     
     is_admin = (user['Rol'] == 'ADMIN')
     def get(f): return kisi.get(f, "") if is_admin else ""
@@ -216,17 +217,16 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
             nu = st.selectbox("Ulaşım", ["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek"], index=["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek"].index(get('Ulasim')) if get('Ulasim') in ["", "Kendisi Gelir", "Araç Gerekir", "İlçeden Gelecek"] else 0)
 
         # --- YENİ ALAN: TANIYANLAR ---
-        ntaniyan = st.text_input("🔗 Tanıyanlar (Virgülle ayırın)", value=get('Taniyanlar'), placeholder="Örn: Serhat, Baran, Mazlum")
+        ntaniyan = st.text_input("🔗 Tanıyanlar (Virgülle ayırın)", value=get('Taniyanlar'))
 
         nn = st.text_area("Notlar", value=get('Cizikler'))
         nr = st.text_input("Rakip Ekleme", value=get('Rakip_Ekleme'))
         nref = st.text_input("Referans", value=get('Referans'))
         
-        # --- ALT BİLGİ DÜZELTME ---
-        with st.expander("🛠️ Bilgi Düzeltme (Üniversite/Bölge)"):
+        with st.expander("🛠️ Bilgi Düzeltme"):
             c_ex1, c_ex2 = st.columns(2)
-            n_uni = c_ex1.text_input("Üniversite Düzelt", value=kisi.get('Universite', ''))
-            n_temsil = c_ex2.text_input("Temsilcilik Düzelt", value=kisi.get('Temsilcilik', ''))
+            n_uni = c_ex1.text_input("Üniversite", value=kisi.get('Universite', ''))
+            n_temsil = c_ex2.text_input("Temsilcilik", value=kisi.get('Temsilcilik', ''))
 
         if st.form_submit_button("✅ KAYDET"):
             updates = [
@@ -259,7 +259,7 @@ if df.empty:
     st.warning("Veriler yükleniyor...")
     st.stop()
 
-# --- SIDEBAR MENU ---
+# --- MENÜ ---
 menu_options = ["📝 Veri Girişi"]
 if user['Rol'] == 'ADMIN':
     menu_options = ["📊 GENEL ANALİZ", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"]
@@ -267,20 +267,15 @@ if user['Rol'] == 'ADMIN':
 menu = st.sidebar.radio("Menü", menu_options)
 
 # =========================================================
-# 🎓 DEMOGRAFİK İSTİHBARAT (5 YILLIK DİLİMLER)
+# 🎓 DEMOGRAFİK İSTİHBARAT
 # =========================================================
 if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
     st.title("🎓 Stratejik Demografi & İstihbarat")
     
-    # 0 yaş (Bilinmeyen) olanları analiz dışı bırak
-    df_valid_age = df[df['Yas'] > 18]
-
     tab1, tab2, tab3 = st.tabs(["🏛️ ÜNİVERSİTE ANALİZİ", "🌍 BÖLGESEL DERİNLİK", "🏢 KURUMSAL İSTİHBARAT"])
 
-    # ---------------- TAB 1: ÜNİVERSİTE ANALİZİ ----------------
     with tab1:
         st.subheader("Üniversite Tabanlı Çözümleme")
-        
         if 'Universite' in df.columns:
             uni_list = sorted([u for u in df['Universite'].unique() if len(str(u)) > 2])
             selected_uni = st.selectbox("Analiz Edilecek Üniversiteyi Seçin:", ["TÜMÜ"] + uni_list)
@@ -293,130 +288,92 @@ if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
                 title = f"{selected_uni} MEZUNLARI"
             
             st.divider()
-            
             c1, c2, c3 = st.columns(3)
             c1.metric("Kişi Sayısı", len(df_uni))
-            
             valid_ages_uni = df_uni[df_uni['Yas'] > 18]['Yas']
             avg_age = valid_ages_uni.mean() if not valid_ages_uni.empty else 0
             c2.metric("Yaş Ortalaması", f"{int(avg_age) if avg_age > 0 else '-'}")
-            
             top_loc = df_uni['Temsilcilik'].mode()[0] if not df_uni.empty else "-"
             c3.metric("En Yoğun Bölge", top_loc)
 
             col_g1, col_g2 = st.columns(2)
             with col_g1:
-                st.caption(f"📊 {title} - Yaş Aralıkları (5 Yıllık)")
+                st.caption(f"📊 {title} - Yaş Aralıkları")
                 df_pie = df_uni[df_uni['Yas'] > 18]
                 if not df_pie.empty:
-                    # Yaş gruplarını sıralı göstermek için
                     age_labels = ["20-24", "25-29", "30-34", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65+"]
                     age_counts = df_pie['Yas_Grubu'].value_counts().reindex(age_labels, fill_value=0).reset_index()
                     age_counts.columns = ['Yaş Aralığı', 'Kişi']
-                    # 0 olanları gösterme
                     age_counts = age_counts[age_counts['Kişi'] > 0]
-                    
                     age_fig = px.bar(age_counts, x='Yaş Aralığı', y='Kişi', title=f"Yaş Dağılımı", text_auto=True)
                     st.plotly_chart(age_fig, use_container_width=True)
-                else:
-                    st.warning("Bu grupta yaş verisi olan kimse yok.")
+                else: st.warning("Yaş verisi yok.")
             
             with col_g2:
                 st.caption(f"📍 {title} - Bölgesel Dağılım")
                 if 'Temsilcilik' in df_uni.columns:
-                    loc_fig = px.bar(df_uni['Temsilcilik'].value_counts().reset_index(), x='Temsilcilik', y='count', title="Temsilciliklere Göre Dağılım")
+                    loc_fig = px.bar(df_uni['Temsilcilik'].value_counts().reset_index(), x='Temsilcilik', y='count', title="Bölgesel Dağılım")
                     st.plotly_chart(loc_fig, use_container_width=True)
 
-            with st.expander(f"📋 {title} Listesini Görüntüle"):
-                st.dataframe(df_uni[['Sicil_No', 'Ad_Soyad', 'Yas', 'Temsilcilik', 'Kurum']], use_container_width=True)
-
-    # ---------------- TAB 2: BÖLGESEL DERİNLİK ----------------
     with tab2:
         st.subheader("🌍 Bölgesel Derin İstihbarat")
-        st.info("Ağrı, Yüksekova, Erciş gibi bölgeleri seçip analiz edin.")
-        
         all_locs = sorted([l for l in df['Temsilcilik'].unique() if len(str(l))>2])
         target_region = st.selectbox("📍 Bölge Seçin:", all_locs)
         
         if target_region:
             df_reg = df[df['Temsilcilik'] == target_region]
-            
             c_r1, c_r2, c_r3 = st.columns(3)
             c_r1.metric("Üye Sayısı", len(df_reg))
-            
             valid_ages = df_reg[df_reg['Yas'] > 18]['Yas']
-            avg_reg_age = int(valid_ages.mean()) if not valid_ages.empty else "-"
-            c_r2.metric("Yaş Ortalaması", avg_reg_age)
-            
-            top_uni = df_reg['Universite'].mode()[0] if not df_reg.empty else "-"
-            c_r3.metric("Hakim Üniversite", top_uni)
+            c_r2.metric("Yaş Ortalaması", int(valid_ages.mean()) if not valid_ages.empty else "-")
+            c_r3.metric("Hakim Üniversite", df_reg['Universite'].mode()[0] if not df_reg.empty else "-")
             
             st.divider()
-            
             col_d1, col_d2, col_d3 = st.columns(3)
-            
             with col_d1:
                 st.markdown("**🎓 Üniversiteler**")
                 if not df_reg.empty:
                     uni_counts = df_reg[df_reg['Universite'].str.len()>2]['Universite'].value_counts().head(7).reset_index()
                     if not uni_counts.empty:
                         fig_ru = px.bar(uni_counts, x='count', y='Universite', orientation='h', text_auto=True, height=350)
-                        fig_ru.update_layout(yaxis={'categoryorder':'total ascending'}, margin=dict(l=0, r=0, t=0, b=0))
+                        fig_ru.update_layout(yaxis={'categoryorder':'total ascending'}, margin=dict(l=0,r=0,t=0,b=0))
                         st.plotly_chart(fig_ru, use_container_width=True)
-                    else: st.warning("Veri yok")
-                
             with col_d2:
-                st.markdown("**👶/👴 Yaş Yapısı**")
+                st.markdown("**👶/👴 Kuşak Yapısı**")
                 df_reg_age = df_reg[df_reg['Yas'] > 18]
                 if not df_reg_age.empty:
-                    # Bar grafik daha okunaklı olur
                     age_labels = ["20-24", "25-29", "30-34", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65+"]
                     age_counts_reg = df_reg_age['Yas_Grubu'].value_counts().reindex(age_labels, fill_value=0).reset_index()
-                    age_counts_reg.columns = ['Yaş Aralığı', 'Kişi']
-                    age_counts_reg = age_counts_reg[age_counts_reg['Kişi'] > 0]
-                    
-                    fig_ra = px.bar(age_counts_reg, x='Yaş Aralığı', y='Kişi', text_auto=True, height=350)
-                    fig_ra.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+                    age_counts_reg = age_counts_reg[age_counts_reg['count'] > 0] if 'count' in age_counts_reg.columns else age_counts_reg
+                    fig_ra = px.bar(age_counts_reg, x='Yas_Grubu', y=age_counts_reg.columns[1], text_auto=True, height=350)
+                    fig_ra.update_layout(margin=dict(l=0,r=0,t=0,b=0))
                     st.plotly_chart(fig_ra, use_container_width=True)
-                else:
-                    st.info("Yaş verisi yok.")
-                
             with col_d3:
                 st.markdown("**🏢 Kurumsal Yapı**")
                 if not df_reg.empty:
                     kurum_counts = df_reg[df_reg['Kurum'].str.len()>1]['Kurum'].value_counts().head(7).reset_index()
                     if not kurum_counts.empty:
                         fig_rk = px.bar(kurum_counts, x='Kurum', y='count', text_auto=True, height=350)
-                        fig_rk.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+                        fig_rk.update_layout(margin=dict(l=0,r=0,t=0,b=0))
                         st.plotly_chart(fig_rk, use_container_width=True)
-            
             with st.expander(f"📋 {target_region} Üye Listesi & Tanıyanlar"):
                 st.dataframe(df_reg[['Sicil_No', 'Ad_Soyad', 'Universite', 'Yas', 'Taniyanlar']], use_container_width=True)
 
-    # ---------------- TAB 3: KURUMSAL İSTİHBARAT ----------------
     with tab3:
         st.subheader("Kurum İçi Dengeler")
-        
         kurum_list = [k for k in df['Kurum'].unique() if len(str(k))>2]
         sel_kurum = st.selectbox("Kurum Seçiniz:", ["TÜMÜ"] + sorted(kurum_list))
-        
-        if sel_kurum != "TÜMÜ":
-            df_kurum = df[df['Kurum'] == sel_kurum]
-        else:
-            df_kurum = df
-            
+        if sel_kurum != "TÜMÜ": df_kurum = df[df['Kurum'] == sel_kurum]
+        else: df_kurum = df
         c_k1, c_k2 = st.columns(2)
-        
         with c_k1:
             st.markdown(f"**{sel_kurum} - Üniversite Dağılımı**")
             u_data = df_kurum[df_kurum['Universite'].str.len()>2]['Universite'].value_counts().head(10)
             st.bar_chart(u_data)
-            
         with c_k2:
             st.markdown(f"**{sel_kurum} - Yaş Grupları**")
             df_kurum_age = df_kurum[df_kurum['Yas'] > 18]
             if not df_kurum_age.empty:
-                # Kurumlar için Pie daha iyi olabilir
                 fig_ka = px.pie(df_kurum_age, names='Yas_Grubu', hole=0.5)
                 st.plotly_chart(fig_ka, use_container_width=True)
 
@@ -425,7 +382,6 @@ if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
 # =========================================================
 elif menu == "📊 GENEL ANALİZ" and user['Rol'] == 'ADMIN':
     st.title("📊 Seçim Komuta Masası")
-    
     temas = df[df['Egilim'].str.len() > 1]
     bizimkiler = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     kararsizlar = temas[temas['Egilim'].isin(["Kararsızım", "Kısmen Yazar"])]
@@ -438,33 +394,31 @@ elif menu == "📊 GENEL ANALİZ" and user['Rol'] == 'ADMIN':
     c4.metric("⚖️ KARARSIZ", len(kararsizlar))
     
     st.divider()
-    
     tabs = st.tabs(["📈 SAHA DURUMU", "🗳️ SANDIK GÜCÜ", "🏢 KURUMLAR"])
-    
     with tabs[0]:
-        if not temas.empty:
-            fig_main = px.pie(temas, names='Egilim', title="Saha Eğilim Dağılımı", hole=0.4)
-            st.plotly_chart(fig_main, use_container_width=True)
-        else:
-            st.info("Henüz veri girişi yapılmamış.")
-            
+        if not temas.empty: st.plotly_chart(px.pie(temas, names='Egilim', title="Saha Eğilim Dağılımı", hole=0.4), use_container_width=True)
     with tabs[1]:
         sandik_ozet = temas.groupby(['Sandik_No', 'Egilim']).size().reset_index(name='Kişi')
-        if not sandik_ozet.empty:
-            fig_san = px.bar(sandik_ozet, x="Sandik_No", y="Kişi", color="Egilim", title="Sandık Bazlı Durum")
-            st.plotly_chart(fig_san, use_container_width=True)
-            
+        if not sandik_ozet.empty: st.plotly_chart(px.bar(sandik_ozet, x="Sandik_No", y="Kişi", color="Egilim", title="Sandık Bazlı Durum"), use_container_width=True)
     with tabs[2]:
         kurum_data = bizimkiler['Kurum'].value_counts().reset_index()
         kurum_data.columns = ['Kurum', 'Oy Sayısı']
-        fig_kur = px.bar(kurum_data.head(10), x='Oy Sayısı', y='Kurum', orientation='h', title="En Güçlü Olduğumuz Kurumlar")
-        st.plotly_chart(fig_kur, use_container_width=True)
+        st.plotly_chart(px.bar(kurum_data.head(10), x='Oy Sayısı', y='Kurum', orientation='h', title="En Güçlü Olduğumuz Kurumlar"), use_container_width=True)
 
 # =========================================================
-# VERİ GİRİŞİ
+# VERİ GİRİŞİ (REFERANS FİLTRESİ EKLENDİ)
 # =========================================================
 elif menu == "📝 Veri Girişi":
     st.header("📋 Seçmen Bilgi Girişi")
+    
+    # --- REFERANS FİLTRESİ ---
+    if 'Taniyanlar' in df.columns:
+        # Tanıyanlar listesini oluştur (Boşları çıkar)
+        referans_list = sorted([str(x) for x in df['Taniyanlar'].unique() if len(str(x)) > 1])
+        selected_ref = st.selectbox("🤝 Referans/Tanıyan Kişiye Göre Filtrele:", ["HEPSİ"] + referans_list)
+    else:
+        selected_ref = "HEPSİ"
+
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     def update_search(): st.session_state.search_term = st.session_state.widget_search
     search = st.text_input("🔍 İsim Ara", value=st.session_state.search_term, key="widget_search", on_change=update_search)
@@ -472,12 +426,27 @@ elif menu == "📝 Veri Girişi":
     cols = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Temsilcilik', 'Kurum', 'Egilim', 'Taniyanlar']
     final_cols = [c for c in cols if c in df.columns]
 
-    if search:
-        df_show = df[df['Ad_Soyad'].str.contains(search, case=False, na=False)]
+    # --- FİLTRELEME MANTIĞI ---
+    if selected_ref != "HEPSİ":
+        # Sadece seçilen referansa ait olanları getir
+        df_show = df[df['Taniyanlar'] == selected_ref]
+        st.info(f"📋 {selected_ref} tarafından tanınan {len(df_show)} kişi listeleniyor.")
     else:
-        page_size = 20
-        if 'page_number' not in st.session_state: st.session_state.page_number = 1
-        total_pages = math.ceil(len(df)/page_size)
+        df_show = df
+
+    if search:
+        # Arama varsa, filtrelenmiş liste üzerinden ara
+        df_show = df_show[
+            df_show['Ad_Soyad'].str.contains(search, case=False, na=False) | 
+            df_show['Taniyanlar'].str.contains(search, case=False, na=False)
+        ]
+
+    # Sayfalama
+    page_size = 20
+    if 'page_number' not in st.session_state: st.session_state.page_number = 1
+    total_pages = math.ceil(len(df_show)/page_size) if len(df_show) > 0 else 1
+    
+    if len(df_show) > 0:
         c1, c2, c3 = st.columns([1,2,1])
         with c1: 
             if st.button("⬅️") and st.session_state.page_number > 1: st.session_state.page_number -= 1
@@ -488,12 +457,17 @@ elif menu == "📝 Veri Girişi":
             if target != st.session_state.page_number:
                 st.session_state.page_number = target
                 st.rerun()
+        
         start = (st.session_state.page_number-1)*page_size
-        df_show = df.iloc[start:start+page_size]
-
-    event = st.dataframe(df_show[final_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
-    if len(event.selection.rows) > 0:
-        idx = event.selection.rows[0]
-        sicil = df_show.iloc[idx]['Sicil_No']
-        g_idx = df[df['Sicil_No'] == sicil].index[0]
-        entry_form_dialog(df.iloc[g_idx], g_idx + 2, sicil, user, df.columns.tolist(), ws, ws_log, df_log)
+        df_display = df_show.iloc[start:start+page_size]
+        
+        event = st.dataframe(df_display[final_cols], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+        
+        if len(event.selection.rows) > 0:
+            idx = event.selection.rows[0]
+            sicil = df_display.iloc[idx]['Sicil_No']
+            # Ana Dataframe'deki indexi bul
+            g_idx = df[df['Sicil_No'] == sicil].index[0]
+            entry_form_dialog(df.iloc[g_idx], g_idx + 2, sicil, user, df.columns.tolist(), ws, ws_log, df_log)
+    else:
+        st.warning("Kriterlere uygun kayıt bulunamadı.")
