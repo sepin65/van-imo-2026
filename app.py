@@ -29,84 +29,117 @@ def get_connection():
     return client
 
 # =============================================================================
-# 2. VERİ MOTORU
+# 2. VERİ MOTORU (HAFIZALI - CACHED)
 # =============================================================================
-def get_data():
+# Bu fonksiyon veriyi çeker ve 5 dakika (300 sn) hafızada tutar. Google'ı yormaz.
+@st.cache_data(ttl=300) 
+def fetch_data_from_google():
     client = get_connection()
     try:
         sheet = client.open("Van_IMO_Secim_2026")
         ws = sheet.worksheet("secmenler")
         all_data = ws.get_all_values()
         
-        if len(all_data) > 1:
-            headers = [h.strip() for h in all_data[0]]
-            rows = all_data[1:]
-            cleaned_headers = [h if h != "" else f"Bos_Sutun_{i}" for i, h in enumerate(headers)]
-            df = pd.DataFrame(rows, columns=cleaned_headers)
-        else: return pd.DataFrame(), None, pd.DataFrame(), None, []
+        # Log verisini de çekelim
+        try:
+            ws_log = sheet.worksheet("log_kayitlari")
+            log_data = ws_log.get_all_values()
+        except:
+            log_data = []
+            
+        return all_data, log_data
+    except Exception as e:
+        return None, None
 
-        rename_map = {
-            'Üniversite': 'Universite',
-            'Doğum_Tarihi': 'Dogum_Tarihi', 'Doğum Tarihi': 'Dogum_Tarihi',
-            'Doğum_Yeri': 'Dogum_Yeri', 'Doğum Yeri': 'Dogum_Yeri',
-            'Eğilim': 'Egilim', 'Ulaşım': 'Ulasim',
-            'Temsilcilik': 'Temsilcilik', 'Tanıyanlar': 'Taniyanlar'
-        }
-        df.rename(columns=rename_map, inplace=True)
-
-        required = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Telefon', 'Universite', 'Dogum_Tarihi', 'Dogum_Yeri', 'Temsilcilik', 'Taniyanlar']
-        for col in required:
-            if col not in df.columns: df[col] = ""
-
-        df['Temsilcilik'] = df['Temsilcilik'].apply(lambda x: str(x).strip().upper() if len(str(x))>2 else "VAN MERKEZ")
-        df['Universite'] = df['Universite'].str.upper().str.strip()
-        
-        curr = datetime.now().year
-        def get_age(d):
-            try:
-                if "/" in str(d): return curr - pd.to_datetime(d, dayfirst=True).year
-                elif "." in str(d): return curr - pd.to_datetime(d, format="%d.%m.%Y").year
-                elif len(str(d))==4: return curr - int(d)
-                return 0
-            except: return 0
-        df['Yas'] = df['Dogum_Tarihi'].apply(get_age)
-        
-        def grp_age(a):
-            if a==0: return "Belirsiz"
-            if a<30: return "20-29"; 
-            if a<40: return "30-39"; 
-            if a<50: return "40-49"; 
-            return "50+"
-        df['Yas_Grubu'] = df['Yas'].apply(grp_age)
-
-        df['Taninma_Durumu'] = df['Taniyanlar'].apply(lambda x: "Referanslı ✅" if len(str(x)) > 2 else "Kör Nokta (Tanınmıyor) ❌")
-        df['Calisma_Durumu'] = df['Temas_Durumu'].apply(lambda x: "Görüşüldü 👍" if len(str(x)) > 2 else "Bekliyor ⏳")
-        
-        def cat_egilim(x):
-            x = str(x).lower()
-            if "tüm" in x or "büyük" in x: return "BİZİM (NET)"
-            elif "kısmen" in x or "kararsız" in x: return "KARARSIZ / ORTADA"
-            elif "karşı" in x: return "RAKİP"
-            else: return "BELİRSİZ"
-        df['Egilim_Kategori'] = df['Egilim'].apply(cat_egilim)
-
-        try: df['Sandik_No'] = pd.qcut(df['Sicil_No'].astype(int).rank(method='first'), q=6, labels=["1. Sandık", "2. Sandık", "3. Sandık", "4. Sandık", "5. Sandık", "6. Sandık"])
-        except: df['Sandik_No'] = "Belirsiz"
-
+def get_data():
+    # 1. Veriyi Hafızadan veya Google'dan Çek
+    all_data, log_raw = fetch_data_from_google()
+    
+    # Yazma işlemleri için Worksheet objesine ihtiyacımız var, onu anlık alıyoruz (Hızlıdır)
+    client = get_connection()
+    try:
+        sheet = client.open("Van_IMO_Secim_2026")
+        ws = sheet.worksheet("secmenler")
         try: ws_log = sheet.worksheet("log_kayitlari")
         except: ws_log = sheet.add_worksheet("log_kayitlari", 1000, 20)
-        
-        log_raw = ws_log.get_all_values()
-        df_log = pd.DataFrame(log_raw[1:], columns=log_raw[0]) if len(log_raw)>1 else pd.DataFrame()
+    except:
+        return pd.DataFrame(), None, pd.DataFrame(), None, []
 
-        all_refs = []
-        for r in df['Taniyanlar'].dropna().astype(str):
-            all_refs.extend([x.strip() for x in r.split(',') if len(x.strip()) > 1])
-        unique_refs = sorted(list(set(all_refs)))
+    if not all_data or len(all_data) < 2:
+        return pd.DataFrame(), ws, pd.DataFrame(), ws_log, []
 
-        return df, ws, df_log, ws_log, unique_refs
+    # 2. Pandas DataFrame'e Çevir
+    headers = [h.strip() for h in all_data[0]]
+    rows = all_data[1:]
+    cleaned_headers = [h if h != "" else f"Bos_Sutun_{i}" for i, h in enumerate(headers)]
+    df = pd.DataFrame(rows, columns=cleaned_headers)
 
-    except Exception: return pd.DataFrame(), None, pd.DataFrame(), None, []
+    # 3. Log Verisini İşle
+    if log_raw and len(log_raw) > 1:
+        df_log = pd.DataFrame(log_raw[1:], columns=log_raw[0])
+    else:
+        df_log = pd.DataFrame(columns=['Zaman', 'Sicil_No', 'Ad_Soyad', 'Kullanici', 'Islem'])
+
+    # 4. Sütun Eşleştirme ve Temizlik
+    rename_map = {
+        'Üniversite': 'Universite',
+        'Doğum_Tarihi': 'Dogum_Tarihi', 'Doğum Tarihi': 'Dogum_Tarihi',
+        'Doğum_Yeri': 'Dogum_Yeri', 'Doğum Yeri': 'Dogum_Yeri',
+        'Eğilim': 'Egilim', 'Ulaşım': 'Ulasim',
+        'Temsilcilik': 'Temsilcilik', 'Tanıyanlar': 'Taniyanlar'
+    }
+    df.rename(columns=rename_map, inplace=True)
+
+    required = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Telefon', 'Universite', 'Dogum_Tarihi', 'Dogum_Yeri', 'Temsilcilik', 'Taniyanlar']
+    for col in required:
+        if col not in df.columns: df[col] = ""
+
+    df['Temsilcilik'] = df['Temsilcilik'].apply(lambda x: str(x).strip().upper() if len(str(x))>2 else "VAN MERKEZ")
+    df['Universite'] = df['Universite'].str.upper().str.strip()
+    
+    # Yaş
+    curr = datetime.now().year
+    def get_age(d):
+        try:
+            if "/" in str(d): return curr - pd.to_datetime(d, dayfirst=True).year
+            elif "." in str(d): return curr - pd.to_datetime(d, format="%d.%m.%Y").year
+            elif len(str(d))==4: return curr - int(d)
+            return 0
+        except: return 0
+    df['Yas'] = df['Dogum_Tarihi'].apply(get_age)
+    
+    def grp_age(a):
+        if a==0: return "Belirsiz"
+        if a<30: return "20-29"; 
+        if a<40: return "30-39"; 
+        if a<50: return "40-49"; 
+        return "50+"
+    df['Yas_Grubu'] = df['Yas'].apply(grp_age)
+
+    # Durumlar
+    df['Taninma_Durumu'] = df['Taniyanlar'].apply(lambda x: "Referanslı ✅" if len(str(x)) > 2 else "Kör Nokta (Tanınmıyor) ❌")
+    df['Calisma_Durumu'] = df['Temas_Durumu'].apply(lambda x: "Görüşüldü 👍" if len(str(x)) > 2 else "Bekliyor ⏳")
+    
+    def cat_egilim(x):
+        x = str(x).lower()
+        if "tüm" in x or "büyük" in x: return "BİZİM (NET)"
+        elif "kısmen" in x or "kararsız" in x: return "KARARSIZ / ORTADA"
+        elif "karşı" in x: return "RAKİP"
+        else: return "BELİRSİZ"
+    df['Egilim_Kategori'] = df['Egilim'].apply(cat_egilim)
+
+    try: df['Sandik_No'] = pd.qcut(df['Sicil_No'].astype(int).rank(method='first'), q=6, labels=["1. Sandık", "2. Sandık", "3. Sandık", "4. Sandık", "5. Sandık", "6. Sandık"])
+    except: df['Sandik_No'] = "Belirsiz"
+
+    if not df_log.empty and 'Sicil_No' in df_log.columns:
+        df_log['Sicil_No'] = df_log['Sicil_No'].astype(str)
+
+    all_refs = []
+    for r in df['Taniyanlar'].dropna().astype(str):
+        all_refs.extend([x.strip() for x in r.split(',') if len(x.strip()) > 1])
+    unique_refs = sorted(list(set(all_refs)))
+
+    return df, ws, df_log, ws_log, unique_refs
 
 # --- PDF MOTORU ---
 def create_pdf(df_s, ref_name):
@@ -134,7 +167,9 @@ if st.session_state.user is None:
                 users_ws = c.open("Van_IMO_Secim_2026").worksheet("kullanicilar")
                 users_data = users_ws.get_all_records()
                 ur = pd.DataFrame(users_data)
+                # İsim Sütunu Kontrolü
                 ur.rename(columns={'Ad Soyad': 'Ad_Soyad', 'isim': 'Ad_Soyad', 'İsim': 'Ad_Soyad'}, inplace=True)
+                
                 login = ur[ur['Kullanici_Adi'] == u]
                 if not login.empty and str(login.iloc[0]['Sifre']) == p:
                     user_dict = login.iloc[0].to_dict()
@@ -142,7 +177,7 @@ if st.session_state.user is None:
                     st.session_state.user = user_dict
                     st.rerun()
                 else: st.error("Hatalı Giriş")
-            except Exception as e: st.error(f"Bağlantı/Veri Hatası: {e}")
+            except Exception as e: st.error(f"Bağlantı Hatası: {e}")
     st.stop()
 
 # --- ADMIN KARTI ---
@@ -168,20 +203,29 @@ def admin_card(kisi, row_n, sicil, user, df_cols, ws, ws_log, unique_refs):
                 t = c if c in df_cols else 'Taniyanlar'
                 if t in df_cols: ws.update_cell(row_n, df_cols.index(t)+1, v)
             ws_log.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), str(sicil), kisi['Ad_Soyad'], user['Kullanici_Adi'], nk, ne, "", "", nt, "", "", nn, r_str])
+            fetch_data_from_google.clear() # Cache temizle
             st.toast("Kaydedildi!"); time.sleep(1); st.rerun()
 
 # --- MAIN LOAD ---
 user = st.session_state.user
+
+# Yan menüye yenile butonu
+if st.sidebar.button("🔄 VERİLERİ YENİLE"):
+    fetch_data_from_google.clear()
+    st.toast("Veriler Google'dan çekildi!")
+    time.sleep(1)
+    st.rerun()
+
 df, ws, df_log, ws_log, unique_refs = get_data()
-if df.empty: st.warning("Yükleniyor..."); st.stop()
+if df.empty: st.warning("Veriler yükleniyor..."); st.stop()
 
 # =========================================================
-# 👷‍♂️ SAHA PERSONELİ EKRANI (BÖLGE SEÇMELİ & SAYFALAMA)
+# 👷‍♂️ SAHA PERSONELİ EKRANI (KOTALI & SAYFALAMA)
 # =========================================================
 if user['Rol'] != 'ADMIN':
     display_name = user.get('Ad_Soyad', user.get('Kullanici_Adi', 'Kullanıcı'))
     st.header(f"👷‍♂️ Saha Paneli: {display_name}")
-    st.caption("Bulunduğun bölgeyi seç, listeyi filtrele, tanıdıklarını işaretle ve kaydet.")
+    st.caption("Tanıdıklarını işaretle ve sayfadaki KAYDET butonuna bas.")
     
     # FİLTRELER
     c1, c2 = st.columns([2,1])
@@ -189,7 +233,6 @@ if user['Rol'] != 'ADMIN':
     regions = ["HEPSİ"] + sorted(df['Temsilcilik'].unique().tolist())
     selected_region = c2.selectbox("📍 Bölge Filtrele:", regions)
     
-    # Veri Hazırlığı
     df_saha = df.copy()
     if selected_region != "HEPSİ": df_saha = df_saha[df_saha['Temsilcilik'] == selected_region]
     if search: df_saha = df_saha[df_saha['Ad_Soyad'].str.contains(search, case=False, na=False)]
@@ -197,55 +240,35 @@ if user['Rol'] != 'ADMIN':
     cols_saha = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Dogum_Tarihi', 'Temsilcilik', 'Dogum_Yeri']
     df_saha['Tanıyorum'] = False
     
-    # --- SAYFALAMA (PAGINATION) SİSTEMİ ---
+    # SAYFALAMA
     if 'saha_page' not in st.session_state: st.session_state.saha_page = 1
-    
-    page_size = 20 # Her sayfada kaç kişi?
+    page_size = 20
     total_records = len(df_saha)
     total_pages = math.ceil(total_records / page_size) if total_records > 0 else 1
     
-    # Eğer filtre değişirse sayfayı 1'e çek
-    if 'last_search' not in st.session_state: st.session_state.last_search = ""
-    if 'last_region' not in st.session_state: st.session_state.last_region = "HEPSİ"
-    
-    if search != st.session_state.last_search or selected_region != st.session_state.last_region:
+    if search != st.session_state.get('last_search', '') or selected_region != st.session_state.get('last_region', ''):
         st.session_state.saha_page = 1
         st.session_state.last_search = search
         st.session_state.last_region = selected_region
 
-    st.info(f"📋 Toplam **{total_records}** kişi bulundu. (Sayfa {st.session_state.saha_page}/{total_pages})")
+    st.info(f"📋 Toplam **{total_records}** kişi. (Sayfa {st.session_state.saha_page}/{total_pages})")
 
-    # Sayfalama Butonları (Üst)
+    # Sayfa Butonları
     c_p1, c_p2, c_p3 = st.columns([1, 2, 1])
-    if c_p1.button("⬅️ Önceki Sayfa", disabled=(st.session_state.saha_page <= 1), key="prev_top"):
-        st.session_state.saha_page -= 1
-        st.rerun()
-    
-    with c_p2:
-        # Sayfa Seçim Kutusu
-        sel_page = st.number_input("Sayfa Git:", min_value=1, max_value=total_pages, value=st.session_state.saha_page, key="page_input")
-        if sel_page != st.session_state.saha_page:
-            st.session_state.saha_page = sel_page
-            st.rerun()
+    if c_p1.button("⬅️ Önceki", disabled=(st.session_state.saha_page <= 1)): st.session_state.saha_page -= 1; st.rerun()
+    if c_p3.button("Sonraki ➡️", disabled=(st.session_state.saha_page >= total_pages)): st.session_state.saha_page += 1; st.rerun()
 
-    if c_p3.button("Sonraki Sayfa ➡️", disabled=(st.session_state.saha_page >= total_pages), key="next_top"):
-        st.session_state.saha_page += 1
-        st.rerun()
-
-    # Sayfaya Göre Veriyi Kes
+    # Dilimle
     start_idx = (st.session_state.saha_page - 1) * page_size
-    end_idx = start_idx + page_size
-    df_page = df_saha.iloc[start_idx:end_idx].copy()
+    df_page = df_saha.iloc[start_idx : start_idx + page_size].copy()
 
-    # EDİTÖR
     edited = st.data_editor(
         df_page[['Tanıyorum'] + cols_saha],
         column_config={"Tanıyorum": st.column_config.CheckboxColumn("Tanıyorum", default=False)},
         disabled=cols_saha, hide_index=True, use_container_width=True, height=750
     )
     
-    # KAYDET BUTONU
-    if st.button("✅ BU SAYFADAKİ SEÇİMLERİ KAYDET", type="primary"):
+    if st.button("✅ BU SAYFADAKİLERİ KAYDET", type="primary"):
         sel_rows = edited[edited['Tanıyorum']==True]
         if not sel_rows.empty:
             prog = st.progress(0); cnt = 0
@@ -260,17 +283,10 @@ if user['Rol'] != 'ADMIN':
                         new_val = f"{curr_val}, {my_name}" if curr_val else my_name
                         ws.update_cell(excel_row, df.columns.get_loc('Taniyanlar')+1, new_val)
                 cnt += 1; prog.progress(cnt/len(sel_rows))
+            
+            fetch_data_from_google.clear() # Cache Temizle
             st.success(f"🎉 {len(sel_rows)} kişi eklendi!"); time.sleep(1); st.rerun()
-        else: st.warning("Bu sayfada kimseyi seçmediniz.")
-
-    # Sayfalama Butonları (Alt)
-    c_b1, c_b2 = st.columns([1, 1])
-    if c_b1.button("⬅️ Önceki", disabled=(st.session_state.saha_page <= 1), key="prev_bot"):
-        st.session_state.saha_page -= 1
-        st.rerun()
-    if c_b2.button("Sonraki ➡️", disabled=(st.session_state.saha_page >= total_pages), key="next_bot"):
-        st.session_state.saha_page += 1
-        st.rerun()
+        else: st.warning("Seçim yapmadınız.")
 
 # =========================================================
 # 👔 ADMIN EKRANI
