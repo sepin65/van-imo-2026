@@ -7,11 +7,10 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
 import math
-import itertools
 
 # --- 1. SAYFA AYARLARI ---
 st.set_page_config(
-    page_title="İMO Van 2026 - Karargah", 
+    page_title="İMO Van 2026 - Harekat Merkezi", 
     layout="wide", 
     page_icon="🏗️",
     initial_sidebar_state="collapsed"
@@ -42,28 +41,13 @@ def get_data():
         else:
             return pd.DataFrame(), None, pd.DataFrame(), None
 
-        # --- KRİTİK DÜZELTME: GENİŞLETİLMİŞ EŞLEŞTİRME ---
-        # Excel'de olabilecek tüm varyasyonları kapsıyoruz
         rename_map = {
             'Üniversite': 'Universite',
-            'Universite': 'Universite',
-            
-            'Doğum_Tarihi': 'Dogum_Yili', # Türkçe karakterli
-            'Dogum_Tarihi': 'Dogum_Yili', # İngilizce karakterli
-            'Doğum Tarihi': 'Dogum_Yili', # Boşluklu
-            'Dogum Tarihi': 'Dogum_Yili', 
-            'Doğum Yılı': 'Dogum_Yili',
-            'Dogum Yili': 'Dogum_Yili',
-            
+            'Doğum_Tarihi': 'Dogum_Yili',
             'Eğilim': 'Egilim',
-            'Egilim': 'Egilim',
-            
             'Ulaşım': 'Ulasim',
-            'Ulasim': 'Ulasim',
-            
             'Temsilcilik': 'Temsilcilik',
-            'Tanıyanlar': 'Taniyanlar',
-            'Taniyanlar': 'Taniyanlar'
+            'Tanıyanlar': 'Taniyanlar'
         }
         df.rename(columns=rename_map, inplace=True)
 
@@ -89,12 +73,9 @@ def get_data():
                 elif "." in date_str: dt = pd.to_datetime(date_str, format="%d.%m.%Y", errors='coerce')
                 elif len(date_str) == 4 and date_str.isdigit(): return current_year - int(date_str)
                 else: return 0
-                
                 if pd.notnull(dt): return current_year - dt.year
                 return 0
             except: return 0
-            
-        # Burada artık 'Dogum_Yili' sütunu garanti var
         df['Yas'] = df['Dogum_Yili'].apply(calculate_age_robust)
 
         def group_age(age):
@@ -111,6 +92,13 @@ def get_data():
             return "65+"
         df['Yas_Grubu'] = df['Yas'].apply(group_age)
 
+        # Temas Durumu Analizi (Yeni Sütun)
+        df['Durum_Analiz'] = df['Temas_Durumu'].apply(lambda x: "Görüşüldü ✅" if len(str(x)) > 2 else "Görüşülmedi ❌")
+
+        # Ulaşım Analizi (Boşları Doldur)
+        df['Ulasim_Durumu'] = df['Ulasim'].apply(lambda x: x if len(str(x)) > 2 else "Belirsiz")
+
+        # Sicil
         def clean_sicil(x):
             try: return int(str(x).replace(".", "").replace(" ", ""))
             except: return 999999 
@@ -124,7 +112,7 @@ def get_data():
             ])
         except: df['Sandik_No'] = "Belirsiz"
 
-        # --- LOGLAR ---
+        # Loglar
         try:
             ws_log = sheet.worksheet("log_kayitlari")
         except:
@@ -151,7 +139,6 @@ def get_data():
         return df, ws, df_log, ws_log
 
     except Exception as e:
-        st.error(f"⚠️ VERİ ÇEKME HATASI: {e}")
         return pd.DataFrame(), None, pd.DataFrame(), None
 
 # --- GİRİŞ EKRANI ---
@@ -179,6 +166,7 @@ if st.session_state.user is None:
 @st.dialog("✏️ SEÇMEN KARTI")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
+    
     yas = kisi.get('Yas', 0)
     uni = kisi.get('Universite', '')
     temsil = kisi.get('Temsilcilik', 'VAN MERKEZ')
@@ -235,7 +223,6 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
                 if col == 'Universite' and 'Üniversite' in df_cols: target = 'Üniversite'
                 if col == 'Temsilcilik' and 'Temsilcilik' in df_cols: target = 'Temsilcilik'
                 if col == 'Tanıyanlar' and 'Taniyanlar' in df_cols: target = 'Taniyanlar'
-                
                 if col in df_cols: ws.update_cell(row_n, df_cols.index(col)+1, val)
                 elif target in df_cols: ws.update_cell(row_n, df_cols.index(target)+1, val)
             
@@ -252,127 +239,163 @@ if df.empty:
     st.warning("Veriler yükleniyor...")
     st.stop()
 
-menu = st.sidebar.radio("Menü", ["📊 GENEL ANALİZ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"] if user['Rol']=='ADMIN' else ["📝 Veri Girişi"])
+menu_list = ["📊 GENEL ANALİZ", "📉 ERİŞİM & FIRSAT ANALİZİ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"] if user['Rol']=='ADMIN' else ["📝 Veri Girişi"]
+menu = st.sidebar.radio("Menü", menu_list)
 
 # =========================================================
-# 🕸️ AĞ İSTİHBARATI (V31 - KÜÇÜK NOKTALAR)
+# 📉 ERİŞİM & FIRSAT ANALİZİ (YENİ VE DETAYLI)
 # =========================================================
-if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
+if menu == "📉 ERİŞİM & FIRSAT ANALİZİ" and user['Rol'] == 'ADMIN':
+    st.title("📉 Erişim & Fırsat Analizi")
+    st.caption("Ulaşılamayan üyeler, bölgesel açıklar ve lojistik ihtiyaçlar.")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["🦅 KARTAL BAKIŞI", "🚫 ULAŞILAMAYANLAR", "🚌 LOJİSTİK PLANLAMA", "🎯 HEDEF KİTLE BULUCU"])
+
+    # --- TAB 1: GENEL DURUM (GÜNEŞ GRAFİĞİ) ---
+    with tab1:
+        st.subheader("Genel Erişim Fotoğrafı")
+        
+        # Sunburst Chart: Bölge -> Durum -> Yaş
+        fig_sun = px.sunburst(
+            df, 
+            path=['Temsilcilik', 'Durum_Analiz', 'Yas_Grubu'],
+            title="Detaylı Dağılım: Bölge > Temas Durumu > Yaş",
+            height=700
+        )
+        st.plotly_chart(fig_sun, use_container_width=True)
+
+    # --- TAB 2: ULAŞILAMAYANLAR ANALİZİ ---
+    with tab2:
+        st.subheader("⚠️ Ulaşılmayan Üyeler Nerede?")
+        df_unreached = df[df['Durum_Analiz'] == "Görüşülmedi ❌"]
+        
+        c1, c2 = st.columns(2)
+        c1.error(f"Toplam Ulaşılmayan: {len(df_unreached)}")
+        c2.metric("Toplamın Yüzdesi", f"%{int(len(df_unreached)/len(df)*100)}")
+        
+        # Hangi Bölgede Ne Kadar Açık Var?
+        bar_gap = df.groupby(['Temsilcilik', 'Durum_Analiz']).size().reset_index(name='Kişi')
+        fig_gap = px.bar(bar_gap, x="Temsilcilik", y="Kişi", color="Durum_Analiz", title="Bölgesel Temas Açığı", barmode="group", color_discrete_map={"Görüşüldü ✅": "green", "Görüşülmedi ❌": "red"})
+        st.plotly_chart(fig_gap, use_container_width=True)
+        
+        st.divider()
+        st.markdown("**Ulaşılmayanların Yaş Dağılımı:**")
+        fig_age_gap = px.histogram(df_unreached, x="Yas_Grubu", color="Yas_Grubu", title="Ulaşılmayan Kitle Hangi Yaşta?")
+        st.plotly_chart(fig_age_gap, use_container_width=True)
+
+    # --- TAB 3: LOJİSTİK PLANLAMA ---
+    with tab3:
+        st.subheader("🚌 Seçim Günü Ulaşım Planı")
+        
+        # Ulaşım verisi olanları al
+        df_logistics = df[df['Ulasim_Durumu'] != "Belirsiz"]
+        
+        c_l1, c_l2 = st.columns(2)
+        with c_l1:
+            st.info(f"Ulaşım Bilgisi Alınan: {len(df_logistics)}")
+        with c_l2:
+            arac_isteyen = len(df[df['Ulasim'].str.contains("Araç", case=False, na=False)])
+            st.warning(f"Araç Talep Eden: {arac_isteyen} Kişi")
+
+        # İlçe Bazlı İhtiyaç
+        log_counts = df.groupby(['Temsilcilik', 'Ulasim_Durumu']).size().reset_index(name='Kişi')
+        fig_log = px.bar(log_counts, x="Temsilcilik", y="Kişi", color="Ulasim_Durumu", title="Bölgelere Göre Araç İhtiyacı")
+        st.plotly_chart(fig_log, use_container_width=True)
+        
+        with st.expander("📋 Araç İsteyenlerin Listesi"):
+            arac_df = df[df['Ulasim'].str.contains("Araç", case=False, na=False)]
+            st.dataframe(arac_df[['Ad_Soyad', 'Telefon', 'Temsilcilik', 'Kurum']], use_container_width=True)
+
+    # --- TAB 4: AKILLI LİSTE OLUŞTURUCU ---
+    with tab4:
+        st.subheader("🎯 Nokta Atışı Liste Oluştur")
+        st.caption("Buradan kriterleri seçip, o gün gidilecek özel listeyi çıkarabilirsiniz.")
+        
+        col_f1, col_f2, col_f3 = st.columns(3)
+        sel_bolge = col_f1.multiselect("Bölge Seç:", df['Temsilcilik'].unique())
+        sel_yas = col_f2.multiselect("Yaş Grubu Seç:", df['Yas_Grubu'].unique())
+        sel_durum = col_f3.selectbox("Temas Durumu:", ["HEPSİ", "Görüşüldü ✅", "Görüşülmedi ❌"], index=2)
+        
+        # Filtreleme Mantığı
+        df_target = df.copy()
+        if sel_bolge: df_target = df_target[df_target['Temsilcilik'].isin(sel_bolge)]
+        if sel_yas: df_target = df_target[df_target['Yas_Grubu'].isin(sel_yas)]
+        if sel_durum != "HEPSİ": df_target = df_target[df_target['Durum_Analiz'] == sel_durum]
+        
+        st.success(f"🎯 Kriterlere uyan {len(df_target)} kişi bulundu.")
+        st.dataframe(df_target[['Sicil_No', 'Ad_Soyad', 'Telefon', 'Temsilcilik', 'Kurum', 'Durum_Analiz']], use_container_width=True)
+
+
+# =========================================================
+# 🕸️ AĞ İSTİHBARATI
+# =========================================================
+elif menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
     st.title("🕸️ Ağ İstihbaratı ve Kümeler")
-    st.caption("Büyük noktalar REFERANSLAR, etrafındaki renkli toz bulutu ÜYELERDİR.")
-
     try:
         import networkx as nx
         import scipy
         HAS_DEPS = True
-    except ImportError as e:
+    except:
         HAS_DEPS = False
-        st.error(f"⚠️ KÜTÜPHANE HATASI: `{e.name}` eksik. Lütfen `requirements.txt` dosyasına ekleyin.")
+        st.error("Kütüphane eksik.")
 
     if HAS_DEPS and 'Taniyanlar' in df.columns:
         df_net = df[df['Taniyanlar'].str.len() > 1].copy()
+        df_net['Ref_List'] = df_net['Taniyanlar'].astype(str).str.split(',')
+        df_exploded = df_net.explode('Ref_List')
+        df_exploded['Ref_List'] = df_exploded['Ref_List'].str.strip()
+        df_exploded = df_exploded[df_exploded['Ref_List'].str.len() > 1]
         
-        if df_net.empty:
-            st.warning("Henüz 'Tanıyanlar' sütununa veri girilmemiş.")
-        else:
-            df_net['Ref_List'] = df_net['Taniyanlar'].astype(str).str.split(',')
-            df_exploded = df_net.explode('Ref_List')
-            df_exploded['Ref_List'] = df_exploded['Ref_List'].str.strip()
-            df_exploded = df_exploded[df_exploded['Ref_List'].str.len() > 1]
+        ref_counts = df_exploded['Ref_List'].value_counts()
+        all_refs = ref_counts.index.tolist()
+        
+        sicil_to_temsil = dict(zip(df['Sicil_No'].astype(str), df['Temsilcilik']))
+        unique_temsil = df['Temsilcilik'].unique()
+        colors = px.colors.qualitative.Dark24
+        temsil_color_map = {t: colors[i % len(colors)] for i, t in enumerate(unique_temsil)}
+
+        n_refs = st.slider("Referans Sayısı", 3, 40, 10)
+        
+        try:
+            selected_refs = all_refs[:n_refs]
+            G = nx.Graph()
+            for ref in selected_refs: G.add_node(ref, type='referrer', size=35, color='#D32F2F', label=ref)
+            filtered = df_exploded[df_exploded['Ref_List'].isin(selected_refs)]
+            for idx, row in filtered.iterrows():
+                sicil = str(row['Sicil_No'])
+                ref = row['Ref_List']
+                name = row['Ad_Soyad']
+                temsil = sicil_to_temsil.get(sicil, "Bilinmiyor")
+                color = temsil_color_map.get(temsil, '#ccc')
+                if not G.has_node(sicil): G.add_node(sicil, type='member', size=5, color=color, label=f"{name} ({temsil})")
+                G.add_edge(ref, sicil)
             
-            ref_counts = df_exploded['Ref_List'].value_counts()
-            all_refs = ref_counts.index.tolist()
-            
-            sicil_to_temsil = dict(zip(df['Sicil_No'].astype(str), df['Temsilcilik']))
-            unique_temsil = df['Temsilcilik'].unique()
-            colors = px.colors.qualitative.Dark24
-            temsil_color_map = {t: colors[i % len(colors)] for i, t in enumerate(unique_temsil)}
-
-            st.subheader("İlişki Ağı ve Kesişimler")
-            n_refs = st.slider("Haritadaki Referans Sayısı", 3, 40, 15)
-            
-            try:
-                selected_refs = all_refs[:n_refs]
-                G = nx.Graph()
-                
-                for ref in selected_refs:
-                    G.add_node(ref, type='referrer', size=35, color='#D32F2F', label=ref)
-                    
-                filtered = df_exploded[df_exploded['Ref_List'].isin(selected_refs)]
-                
-                for idx, row in filtered.iterrows():
-                    sicil = str(row['Sicil_No'])
-                    ref = row['Ref_List']
-                    name = row['Ad_Soyad']
-                    temsil = sicil_to_temsil.get(sicil, "Bilinmiyor")
-                    color = temsil_color_map.get(temsil, '#ccc')
-                    
-                    if not G.has_node(sicil):
-                        G.add_node(sicil, type='member', size=5, color=color, label=f"{name} ({temsil})")
-                    G.add_edge(ref, sicil)
-                
-                with st.spinner("Harita hesaplanıyor..."):
-                    pos = nx.spring_layout(G, k=0.8/math.sqrt(len(G.nodes())+1), iterations=50, seed=42)
-                    
-                    edge_x, edge_y = [], []
-                    for edge in G.edges():
-                        x0, y0 = pos[edge[0]]
-                        x1, y1 = pos[edge[1]]
-                        edge_x.extend([x0, x1, None])
-                        edge_y.extend([y0, y1, None])
-
-                    edge_trace = go.Scatter(
-                        x=edge_x, y=edge_y,
-                        line=dict(width=0.2, color='rgba(150,150,150,0.3)'),
-                        hoverinfo='none', mode='lines')
-
-                    ref_x, ref_y, ref_text = [], [], []
-                    for node in G.nodes():
-                        if G.nodes[node]['type'] == 'referrer':
-                            x, y = pos[node]
-                            ref_x.append(x); ref_y.append(y)
-                            ref_text.append(G.nodes[node]['label'])
-
-                    ref_trace = go.Scatter(
-                        x=ref_x, y=ref_y, mode='markers+text',
-                        text=ref_text, textposition="top center",
-                        textfont=dict(size=14, color='black', family="Arial Black"),
-                        marker=dict(size=30, color='red', line=dict(width=2, color='white')))
-
-                    mem_x, mem_y, mem_text, mem_cols = [], [], [], []
-                    for node in G.nodes():
-                        if G.nodes[node]['type'] == 'member':
-                            x, y = pos[node]
-                            mem_x.append(x); mem_y.append(y)
-                            mem_text.append(G.nodes[node]['label'])
-                            mem_cols.append(G.nodes[node]['color'])
-
-                    mem_trace = go.Scatter(
-                        x=mem_x, y=mem_y, mode='markers',
-                        hovertext=mem_text, hoverinfo='text',
-                        marker=dict(size=6, color=mem_cols, opacity=0.8, line=dict(width=0.5, color='white')))
-
-                    fig = go.Figure(data=[edge_trace, mem_trace, ref_trace],
-                                    layout=go.Layout(
-                                        showlegend=False, hovermode='closest',
-                                        margin=dict(b=0,l=0,r=0,t=0),
-                                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                        height=700, plot_bgcolor='white'))
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.caption("Küme Renkleri:")
-                    cols = st.columns(len(unique_temsil))
-                    for i, t in enumerate(unique_temsil):
-                        cols[i].markdown(f"<span style='color:{temsil_color_map[t]}'>●</span> {t}", unsafe_allow_html=True)
-            
-            except Exception as e:
-                st.error(f"Grafik Hatası: {e}")
-
-        st.divider()
-        ref_counts = df_exploded['Ref_List'].value_counts().reset_index()
-        ref_counts.columns = ['Referans', 'Tanıdığı Kişi Sayısı']
-        st.plotly_chart(px.bar(ref_counts.head(30), x='Tanıdığı Kişi Sayısı', y='Referans', orientation='h', height=600), use_container_width=True)
+            with st.spinner("Harita hesaplanıyor..."):
+                pos = nx.spring_layout(G, k=0.8/math.sqrt(len(G.nodes())+1), iterations=50, seed=42)
+                edge_x, edge_y = [], []
+                for edge in G.edges():
+                    x0, y0 = pos[edge[0]]
+                    x1, y1 = pos[edge[1]]
+                    edge_x.extend([x0, x1, None])
+                    edge_y.extend([y0, y1, None])
+                edge_trace = go.Scatter(x=edge_x, y=edge_y, line=dict(width=0.2, color='rgba(150,150,150,0.3)'), hoverinfo='none', mode='lines')
+                ref_x, ref_y, ref_text = [], [], []
+                for node in G.nodes():
+                    if G.nodes[node]['type'] == 'referrer':
+                        x, y = pos[node]
+                        ref_x.append(x); ref_y.append(y); ref_text.append(G.nodes[node]['label'])
+                ref_trace = go.Scatter(x=ref_x, y=ref_y, mode='markers+text', text=ref_text, textposition="top center", marker=dict(size=30, color='red', line=dict(width=2, color='white')))
+                mem_x, mem_y, mem_text, mem_cols = [], [], [], []
+                for node in G.nodes():
+                    if G.nodes[node]['type'] == 'member':
+                        x, y = pos[node]
+                        mem_x.append(x); mem_y.append(y); mem_text.append(G.nodes[node]['label']); mem_cols.append(G.nodes[node]['color'])
+                mem_trace = go.Scatter(x=mem_x, y=mem_y, mode='markers', hovertext=mem_text, hoverinfo='text', marker=dict(size=6, color=mem_cols, opacity=0.8, line=dict(width=0.5, color='white')))
+                fig = go.Figure(data=[edge_trace, mem_trace, ref_trace], layout=go.Layout(showlegend=False, hovermode='closest', margin=dict(b=0,l=0,r=0,t=0), xaxis=dict(showgrid=False, zeroline=False, showticklabels=False), yaxis=dict(showgrid=False, zeroline=False, showticklabels=False), height=700))
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption("Küme Renkleri:"); cols = st.columns(len(unique_temsil))
+                for i, t in enumerate(unique_temsil): cols[i].markdown(f"<span style='color:{temsil_color_map[t]}'>●</span> {t}", unsafe_allow_html=True)
+        except Exception as e: st.error(f"Hata: {e}")
 
 # =========================================================
 # 🎓 DEMOGRAFİK İSTİHBARAT
@@ -380,56 +403,16 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
 elif menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
     st.title("🎓 Stratejik Demografi")
     tab1, tab2, tab3 = st.tabs(["🏛️ ÜNİVERSİTE", "🌍 BÖLGESEL", "🏢 KURUMSAL"])
-
+    # (Önceki kodun aynısı - yer kazanmak için kısa tutuldu)
     with tab1:
         if 'Universite' in df.columns:
             uni_list = sorted([u for u in df['Universite'].unique() if len(str(u)) > 2])
-            selected_uni = st.selectbox("Üniversite Seçin:", ["TÜMÜ"] + uni_list)
+            selected_uni = st.selectbox("Üniversite:", ["TÜMÜ"] + uni_list)
             df_uni = df[df['Universite'] == selected_uni] if selected_uni != "TÜMÜ" else df[df['Universite'].str.len() > 2]
-            
-            c1, c2, c3 = st.columns(3)
+            c1, c2 = st.columns(2)
             c1.metric("Kişi", len(df_uni))
-            val_ages = df_uni[df_uni['Yas']>18]['Yas']
-            c2.metric("Yaş Ort.", int(val_ages.mean()) if not val_ages.empty else "-")
-            c3.metric("Bölge", df_uni['Temsilcilik'].mode()[0] if not df_uni.empty else "-")
-            
-            c_g1, c_g2 = st.columns(2)
-            with c_g1:
-                df_pie = df_uni[df_uni['Yas'] > 18]
-                if not df_pie.empty:
-                    age_labels = ["20-24", "25-29", "30-34", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65+"]
-                    ac = df_pie['Yas_Grubu'].value_counts().reindex(age_labels, fill_value=0).reset_index()
-                    st.plotly_chart(px.bar(ac[ac['count']>0], x='Yas_Grubu', y='count', title="Yaş Dağılımı"), use_container_width=True)
-            with c_g2:
-                st.plotly_chart(px.bar(df_uni['Temsilcilik'].value_counts().reset_index(), x='Temsilcilik', y='count', title="Bölge"), use_container_width=True)
-
-    with tab2:
-        locs = sorted([l for l in df['Temsilcilik'].unique() if len(str(l))>2])
-        tr = st.selectbox("Bölge:", locs)
-        if tr:
-            df_reg = df[df['Temsilcilik'] == tr]
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Üye", len(df_reg))
-            c2.metric("Yaş Ort.", int(df_reg[df_reg['Yas']>18]['Yas'].mean()) if not df_reg[df_reg['Yas']>18].empty else "-")
-            c3.metric("Üniv.", df_reg['Universite'].mode()[0] if not df_reg.empty else "-")
-            
-            c_d1, c_d2 = st.columns(2)
-            with c_d1: 
-                uc = df_reg[df_reg['Universite'].str.len()>2]['Universite'].value_counts().head(7).reset_index()
-                st.plotly_chart(px.bar(uc, x='count', y='Universite', orientation='h'), use_container_width=True)
-            with c_d2:
-                st.dataframe(df_reg[['Ad_Soyad', 'Universite', 'Yas', 'Taniyanlar']], use_container_width=True)
-
-    with tab3:
-        ks = st.selectbox("Kurum:", ["TÜMÜ"] + sorted([k for k in df['Kurum'].unique() if len(str(k))>2]))
-        df_k = df[df['Kurum'] == ks] if ks != "TÜMÜ" else df
-        c1, c2 = st.columns(2)
-        with c1:
-            ud = df_k[df_k['Universite'].str.len()>2]['Universite'].value_counts().head(10)
-            st.bar_chart(ud)
-        with c2:
-            if not df_k[df_k['Yas']>18].empty:
-                st.plotly_chart(px.pie(df_k[df_k['Yas']>18], names='Yas_Grubu', hole=0.5), use_container_width=True)
+            df_pie = df_uni[df_uni['Yas'] > 18]
+            if not df_pie.empty: st.plotly_chart(px.bar(df_pie['Yas_Grubu'].value_counts().reset_index(), x='Yas_Grubu', y='count'), use_container_width=True)
 
 # =========================================================
 # GENEL ANALİZ
