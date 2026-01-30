@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 # --- 2. BAĞLANTIYI KUR ---
-@st.cache_resource(ttl=600) # Bağlantıyı 10 dk önbellekte tut
+@st.cache_resource(ttl=600)
 def get_connection():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds_dict = dict(st.secrets["gcp_service_account"])
@@ -37,24 +37,37 @@ def get_data():
         if len(all_data) > 1:
             headers = [h.strip() for h in all_data[0]]
             rows = all_data[1:]
-            # Boş sütun başlıklarını onar
             cleaned_headers = [h if h != "" else f"Bos_Sutun_{i}" for i, h in enumerate(headers)]
             df = pd.DataFrame(rows, columns=cleaned_headers)
         else:
-            st.error("Excel dosyası boş veya okunamadı.")
             return pd.DataFrame(), None, pd.DataFrame(), None
 
+        # --- KRİTİK DÜZELTME: GENİŞLETİLMİŞ EŞLEŞTİRME ---
+        # Excel'de olabilecek tüm varyasyonları kapsıyoruz
         rename_map = {
             'Üniversite': 'Universite',
-            'Doğum_Tarihi': 'Dogum_Yili',
+            'Universite': 'Universite',
+            
+            'Doğum_Tarihi': 'Dogum_Yili', # Türkçe karakterli
+            'Dogum_Tarihi': 'Dogum_Yili', # İngilizce karakterli
+            'Doğum Tarihi': 'Dogum_Yili', # Boşluklu
+            'Dogum Tarihi': 'Dogum_Yili', 
+            'Doğum Yılı': 'Dogum_Yili',
+            'Dogum Yili': 'Dogum_Yili',
+            
             'Eğilim': 'Egilim',
+            'Egilim': 'Egilim',
+            
             'Ulaşım': 'Ulasim',
+            'Ulasim': 'Ulasim',
+            
             'Temsilcilik': 'Temsilcilik',
-            'Tanıyanlar': 'Taniyanlar'
+            'Tanıyanlar': 'Taniyanlar',
+            'Taniyanlar': 'Taniyanlar'
         }
         df.rename(columns=rename_map, inplace=True)
 
-        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon', 'Universite', 'Dogum_Tarihi', 'Temsilcilik', 'Taniyanlar']
+        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon', 'Universite', 'Dogum_Yili', 'Temsilcilik', 'Taniyanlar']
         for col in required_cols:
             if col not in df.columns: df[col] = ""
 
@@ -76,9 +89,12 @@ def get_data():
                 elif "." in date_str: dt = pd.to_datetime(date_str, format="%d.%m.%Y", errors='coerce')
                 elif len(date_str) == 4 and date_str.isdigit(): return current_year - int(date_str)
                 else: return 0
+                
                 if pd.notnull(dt): return current_year - dt.year
                 return 0
             except: return 0
+            
+        # Burada artık 'Dogum_Yili' sütunu garanti var
         df['Yas'] = df['Dogum_Yili'].apply(calculate_age_robust)
 
         def group_age(age):
@@ -135,7 +151,7 @@ def get_data():
         return df, ws, df_log, ws_log
 
     except Exception as e:
-        st.error(f"⚠️ VERİ ÇEKME HATASI: {e}") # Hatayı ekrana bas
+        st.error(f"⚠️ VERİ ÇEKME HATASI: {e}")
         return pd.DataFrame(), None, pd.DataFrame(), None
 
 # --- GİRİŞ EKRANI ---
@@ -156,14 +172,13 @@ if st.session_state.user is None:
                     st.session_state.user = login.iloc[0].to_dict()
                     st.rerun()
                 else: st.error("Hatalı Giriş")
-            except Exception as e: st.error(f"Giriş Hatası: {e}")
+            except: st.error("Bağlantı Hatası")
     st.stop()
 
 # --- FORM ---
 @st.dialog("✏️ SEÇMEN KARTI")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
-    
     yas = kisi.get('Yas', 0)
     uni = kisi.get('Universite', '')
     temsil = kisi.get('Temsilcilik', 'VAN MERKEZ')
@@ -234,13 +249,13 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
 user = st.session_state.user
 df, ws, df_log, ws_log = get_data()
 if df.empty:
-    st.warning("Veriler yükleniyor veya Excel erişim hatası var. Lütfen bekleyiniz.")
+    st.warning("Veriler yükleniyor...")
     st.stop()
 
 menu = st.sidebar.radio("Menü", ["📊 GENEL ANALİZ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"] if user['Rol']=='ADMIN' else ["📝 Veri Girişi"])
 
 # =========================================================
-# 🕸️ AĞ İSTİHBARATI (V30 - HATA KORUMALI)
+# 🕸️ AĞ İSTİHBARATI (V31 - KÜÇÜK NOKTALAR)
 # =========================================================
 if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
     st.title("🕸️ Ağ İstihbaratı ve Kümeler")
@@ -252,7 +267,7 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
         HAS_DEPS = True
     except ImportError as e:
         HAS_DEPS = False
-        st.error(f"⚠️ KÜTÜPHANE HATASI: `{e.name}` eksik. Lütfen `requirements.txt` dosyasına ekleyin ve uygulamayı yeniden başlatın.")
+        st.error(f"⚠️ KÜTÜPHANE HATASI: `{e.name}` eksik. Lütfen `requirements.txt` dosyasına ekleyin.")
 
     if HAS_DEPS and 'Taniyanlar' in df.columns:
         df_net = df[df['Taniyanlar'].str.len() > 1].copy()
@@ -274,18 +289,15 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
             temsil_color_map = {t: colors[i % len(colors)] for i, t in enumerate(unique_temsil)}
 
             st.subheader("İlişki Ağı ve Kesişimler")
-            n_refs = st.slider("Haritadaki Referans Sayısı", 3, 30, 8)
+            n_refs = st.slider("Haritadaki Referans Sayısı", 3, 40, 15)
             
-            # --- GRAFİK OLUŞTURMA ---
             try:
                 selected_refs = all_refs[:n_refs]
                 G = nx.Graph()
                 
-                # Referanslar
                 for ref in selected_refs:
                     G.add_node(ref, type='referrer', size=35, color='#D32F2F', label=ref)
                     
-                # Üyeler
                 filtered = df_exploded[df_exploded['Ref_List'].isin(selected_refs)]
                 
                 for idx, row in filtered.iterrows():
@@ -299,9 +311,7 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
                         G.add_node(sicil, type='member', size=5, color=color, label=f"{name} ({temsil})")
                     G.add_edge(ref, sicil)
                 
-                # Layout (Hesaplama)
                 with st.spinner("Harita hesaplanıyor..."):
-                    # K değeri artarsa düğümler uzaklaşır
                     pos = nx.spring_layout(G, k=0.8/math.sqrt(len(G.nodes())+1), iterations=50, seed=42)
                     
                     edge_x, edge_y = [], []
@@ -359,7 +369,6 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
             except Exception as e:
                 st.error(f"Grafik Hatası: {e}")
 
-        # Referans Bar Grafiği
         st.divider()
         ref_counts = df_exploded['Ref_List'].value_counts().reset_index()
         ref_counts.columns = ['Referans', 'Tanıdığı Kişi Sayısı']
