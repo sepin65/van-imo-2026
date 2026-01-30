@@ -29,7 +29,7 @@ def get_connection():
     return client
 
 # =============================================================================
-# 2. VERİ MOTORU (GELİŞMİŞ)
+# 2. VERİ MOTORU
 # =============================================================================
 def get_data():
     client = get_connection()
@@ -45,7 +45,6 @@ def get_data():
             df = pd.DataFrame(rows, columns=cleaned_headers)
         else: return pd.DataFrame(), None, pd.DataFrame(), None, []
 
-        # Sütun Eşleştirme
         rename_map = {
             'Üniversite': 'Universite',
             'Doğum_Tarihi': 'Dogum_Tarihi', 'Doğum Tarihi': 'Dogum_Tarihi',
@@ -55,16 +54,13 @@ def get_data():
         }
         df.rename(columns=rename_map, inplace=True)
 
-        # Eksik sütunları tamamla
         required = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Telefon', 'Universite', 'Dogum_Tarihi', 'Dogum_Yeri', 'Temsilcilik', 'Taniyanlar']
         for col in required:
             if col not in df.columns: df[col] = ""
 
-        # Temizlik
         df['Temsilcilik'] = df['Temsilcilik'].apply(lambda x: str(x).strip().upper() if len(str(x))>2 else "VAN MERKEZ")
         df['Universite'] = df['Universite'].str.upper().str.strip()
         
-        # Yaş Hesaplama
         curr = datetime.now().year
         def get_age(d):
             try:
@@ -83,11 +79,9 @@ def get_data():
             return "50+"
         df['Yas_Grubu'] = df['Yas'].apply(grp_age)
 
-        # Durum Analizleri
         df['Taninma_Durumu'] = df['Taniyanlar'].apply(lambda x: "Referanslı ✅" if len(str(x)) > 2 else "Kör Nokta (Tanınmıyor) ❌")
         df['Calisma_Durumu'] = df['Temas_Durumu'].apply(lambda x: "Görüşüldü 👍" if len(str(x)) > 2 else "Bekliyor ⏳")
         
-        # Eğilim Kategorileri (Trafik Işığı İçin)
         def cat_egilim(x):
             x = str(x).lower()
             if "tüm" in x or "büyük" in x: return "BİZİM (NET)"
@@ -96,11 +90,9 @@ def get_data():
             else: return "BELİRSİZ"
         df['Egilim_Kategori'] = df['Egilim'].apply(cat_egilim)
 
-        # Sandık
         try: df['Sandik_No'] = pd.qcut(df['Sicil_No'].astype(int).rank(method='first'), q=6, labels=["1. Sandık", "2. Sandık", "3. Sandık", "4. Sandık", "5. Sandık", "6. Sandık"])
         except: df['Sandik_No'] = "Belirsiz"
 
-        # Log & Referans Listesi
         try: ws_log = sheet.worksheet("log_kayitlari")
         except: ws_log = sheet.add_worksheet("log_kayitlari", 1000, 20)
         
@@ -116,7 +108,7 @@ def get_data():
 
     except Exception: return pd.DataFrame(), None, pd.DataFrame(), None, []
 
-# --- PDF MOTORU (DÜZELTİLMİŞ) ---
+# --- PDF MOTORU ---
 def create_pdf(df_s, ref_name):
     def clean(t):
         t = str(t).replace('ğ','g').replace('Ğ','G').replace('ş','s').replace('Ş','S').replace('ı','i').replace('İ','I').replace('ü','u').replace('Ü','U').replace('ö','o').replace('Ö','O').replace('ç','c').replace('Ç','C')
@@ -130,7 +122,7 @@ def create_pdf(df_s, ref_name):
         pdf.cell(15,7,clean(r['Sicil_No']),1); pdf.cell(60,7,clean(r['Ad_Soyad'])[:30],1); pdf.cell(30,7,clean(r['Telefon']),1); pdf.cell(35,7,clean(r['Calisma_Durumu']),1); pdf.cell(40,7,clean(r['Kurum'])[:25],1); pdf.ln()
     return pdf.output(dest='S').encode('latin-1','replace')
 
-# --- GİRİŞ ---
+# --- GİRİŞ EKRANI (HATA KORUMALI) ---
 if 'user' not in st.session_state: st.session_state.user = None
 if st.session_state.user is None:
     st.title("🏗️ İMO SEÇİM SİSTEMİ")
@@ -138,21 +130,35 @@ if st.session_state.user is None:
         u = st.text_input("Kullanıcı"); p = st.text_input("Şifre", type="password")
         if st.form_submit_button("Giriş"):
             try:
-                c = get_connection(); users = c.open("Van_IMO_Secim_2026").worksheet("kullanicilar").get_all_records()
-                ur = pd.DataFrame(users); login = ur[ur['Kullanici_Adi'] == u]
+                c = get_connection(); 
+                # Kullanıcıları al
+                users_ws = c.open("Van_IMO_Secim_2026").worksheet("kullanicilar")
+                users_data = users_ws.get_all_records()
+                ur = pd.DataFrame(users_data)
+                
+                # Sütun adı düzeltme (Ad Soyad -> Ad_Soyad)
+                ur.rename(columns={'Ad Soyad': 'Ad_Soyad', 'isim': 'Ad_Soyad', 'İsim': 'Ad_Soyad'}, inplace=True)
+                
+                login = ur[ur['Kullanici_Adi'] == u]
+                
                 if not login.empty and str(login.iloc[0]['Sifre']) == p:
-                    st.session_state.user = login.iloc[0].to_dict(); st.rerun()
-                else: st.error("Hatalı")
-            except: st.error("Bağlantı Hatası")
+                    user_dict = login.iloc[0].to_dict()
+                    # Eğer hala Ad_Soyad yoksa, Kullanıcı Adını kopyala
+                    if 'Ad_Soyad' not in user_dict:
+                        user_dict['Ad_Soyad'] = user_dict['Kullanici_Adi']
+                    
+                    st.session_state.user = user_dict
+                    st.rerun()
+                else: st.error("Hatalı Giriş")
+            except Exception as e: st.error(f"Bağlantı/Veri Hatası: {e}")
     st.stop()
 
-# --- ADMIN KARTI (DETAYLI) ---
+# --- ADMIN KARTI ---
 @st.dialog("✏️ YÖNETİCİ KARTI")
 def admin_card(kisi, row_n, sicil, user, df_cols, ws, ws_log, unique_refs):
     st.markdown(f"### {kisi['Ad_Soyad']}")
     st.info(f"📍 {kisi.get('Temsilcilik','')} | 🎓 {kisi.get('Universite','')} | {kisi.get('Dogum_Yeri','')}")
     if len(str(kisi.get('Taniyanlar','')))>2: st.success(f"🔗 {kisi.get('Taniyanlar','')}")
-    else: st.error("Tanıyan Yok")
     
     with st.form("af"):
         cur_refs = [x.strip() for x in str(kisi.get('Taniyanlar','')).split(',') if len(x.strip())>1]
@@ -177,15 +183,17 @@ user = st.session_state.user
 df, ws, df_log, ws_log, unique_refs = get_data()
 if df.empty: st.warning("Yükleniyor..."); st.stop()
 
-# =============================================================================
-# 👷‍♂️ SAHA PERSONELİ EKRANI (BASİT & PRATİK)
-# =============================================================================
+# =========================================================
+# 👷‍♂️ SAHA PERSONELİ EKRANI (HATA DÜZELTİLDİ)
+# =========================================================
 if user['Rol'] != 'ADMIN':
-    st.header(f"👷‍♂️ Saha Paneli: {user['Ad_Soyad']}")
+    # HATA KORUMASI: Eğer Ad_Soyad yoksa Kullanıcı Adını Kullan
+    display_name = user.get('Ad_Soyad', user.get('Kullanici_Adi', 'Kullanıcı'))
+    
+    st.header(f"👷‍♂️ Saha Paneli: {display_name}")
     st.caption("Tanıdığın kişilerin yanındaki kutucuğu işaretle ve en alttaki 'KAYDET' butonuna bas.")
     
-    # Pratik Filtreler
-    c1, c2, c3 = st.columns([2,1,1])
+    c1, c2 = st.columns([2,1])
     search = c1.text_input("🔍 İsim Ara", placeholder="Kişi adı...")
     mode = c2.radio("Görünüm:", ["Tümü", "Tanınmayanlar"], horizontal=True)
     
@@ -193,20 +201,13 @@ if user['Rol'] != 'ADMIN':
     if mode == "Tanınmayanlar": df_saha = df_saha[df_saha['Taninma_Durumu'].str.contains("Kör")]
     if search: df_saha = df_saha[df_saha['Ad_Soyad'].str.contains(search, case=False, na=False)]
     
-    # Saha için özel sütunlar
     cols_saha = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Dogum_Tarihi', 'Temsilcilik', 'Dogum_Yeri']
-    
-    # DÜZENLENEBİLİR TABLO (CHECKBOX)
-    st.info(f"📋 {len(df_saha)} kişi listeleniyor.")
-    df_saha['Tanıyorum'] = False # Checkbox sütunu
+    df_saha['Tanıyorum'] = False
     
     edited = st.data_editor(
-        df_saha[['Tanıyorum'] + cols_saha].head(200), # Performans için limit
+        df_saha[['Tanıyorum'] + cols_saha].head(200),
         column_config={"Tanıyorum": st.column_config.CheckboxColumn("Tanıyorum", default=False)},
-        disabled=cols_saha,
-        hide_index=True,
-        use_container_width=True,
-        height=600
+        disabled=cols_saha, hide_index=True, use_container_width=True, height=600
     )
     
     if st.button("✅ SEÇİLENLERİ LİSTEME EKLE", type="primary"):
@@ -219,7 +220,7 @@ if user['Rol'] != 'ADMIN':
                 if mask.any():
                     orig_idx = df.index[mask][0]; excel_row = orig_idx + 2
                     curr_val = df.at[orig_idx, 'Taniyanlar']
-                    my_name = user['Ad_Soyad']
+                    my_name = display_name # Giriş yapan isim
                     if my_name not in str(curr_val):
                         new_val = f"{curr_val}, {my_name}" if curr_val else my_name
                         ws.update_cell(excel_row, df.columns.get_loc('Taniyanlar')+1, new_val)
@@ -227,48 +228,42 @@ if user['Rol'] != 'ADMIN':
             st.success(f"🎉 {len(sel_rows)} kişi eklendi!"); time.sleep(2); st.rerun()
         else: st.warning("Seçim yapmadınız.")
 
-# =============================================================================
-# 👔 ADMIN EKRANI (FULL + FULL)
-# =============================================================================
+# =========================================================
+# 👔 ADMIN EKRANI
+# =========================================================
 else:
     menu = st.sidebar.radio("Menü", ["📊 STRATEJİK ANALİZ", "🤝 REFERANS & PDF", "📉 KÖR NOKTA", "🕸️ AĞ HARİTASI", "🎓 DEMOGRAFİK", "📝 YÖNETİCİ GİRİŞİ"])
 
-    # 1. STRATEJİK ANALİZ (V41'den)
     if menu == "📊 STRATEJİK ANALİZ":
         st.title("📊 Stratejik Komuta"); c1,c2,c3,c4=st.columns(4)
         c1.metric("Toplam", len(df)); c2.metric("Bizim", len(df[df['Egilim_Kategori']=="BİZİM (NET)"]))
         c3.metric("Kararsız", len(df[df['Egilim_Kategori']=="KARARSIZ / ORTADA"]), delta_color="off"); c4.metric("Görüşülen", len(df[df['Calisma_Durumu']=="Görüşüldü 👍"]))
-        
-        t1, t2, t3 = st.tabs(["🚦 EĞİLİM", "⚖️ KARARSIZLAR", "🏆 PERFORMANS"])
+        t1,t2,t3=st.tabs(["EĞİLİM","PERFORMANS","KARARSIZ"])
         with t1:
             st.plotly_chart(px.pie(df, names='Egilim_Kategori', hole=0.4, color='Egilim_Kategori', color_discrete_map={"BİZİM (NET)":"green","KARARSIZ / ORTADA":"gold","RAKİP":"red","BELİRSİZ":"grey"}), use_container_width=True)
             grp = df.groupby(['Sandik_No', 'Egilim_Kategori']).size().reset_index(name='Kişi')
             st.plotly_chart(px.bar(grp, x="Sandik_No", y="Kişi", color="Egilim_Kategori", barmode="group", color_discrete_map={"BİZİM (NET)":"green","KARARSIZ / ORTADA":"gold","RAKİP":"red","BELİRSİZ":"grey"}), use_container_width=True)
         with t2:
-            df_k = df[df['Egilim_Kategori']=="KARARSIZ / ORTADA"]
-            st.info(f"Kararsız: {len(df_k)} kişi")
-            st.plotly_chart(px.bar(df_k['Kurum'].value_counts().head(10).reset_index(), x='count', y='Kurum', orientation='h', title="Kararsız Kurumlar"), use_container_width=True)
-            st.dataframe(df_k[['Sicil_No','Ad_Soyad','Taniyanlar']], use_container_width=True)
-        with t3:
             if 'Taniyanlar' in df.columns:
                 exp = df.assign(Ref=df['Taniyanlar'].str.split(',')).explode('Ref')
                 exp['Ref'] = exp['Ref'].str.strip(); exp = exp[exp['Ref'].str.len()>1]
                 perf = exp.groupby('Ref').agg(Toplam=('Sicil_No','count'), Gorusulen=('Calisma_Durumu', lambda x: (x=="Görüşüldü 👍").sum())).reset_index()
                 perf['Basari'] = (perf['Gorusulen']/perf['Toplam']*100).astype(int)
                 st.plotly_chart(px.bar(perf.sort_values('Toplam', ascending=False).head(20), x='Basari', y='Ref', orientation='h', title="Performans %"), use_container_width=True)
+        with t3:
+            st.dataframe(df[df['Egilim_Kategori']=="KARARSIZ / ORTADA"][['Sicil_No','Ad_Soyad','Taniyanlar']], use_container_width=True)
 
-    # 2. REFERANS YÖNETİMİ & PDF (V40'tan)
     elif menu == "🤝 REFERANS & PDF":
-        st.title("🤝 Referans Yönetim & Denetim")
-        t1, t2 = st.tabs(["ATAMA YAP", "GÖREV LİSTESİ & PDF"])
+        st.title("🤝 Referans Yönetim")
+        t1, t2 = st.tabs(["ATAMA", "GÖREV & PDF"])
         with t1:
             s = st.text_input("Kör Nokta Ara"); r = st.selectbox("Bölge", ["HEPSİ"]+sorted(df['Temsilcilik'].unique().tolist()))
             df_a = df[df['Taninma_Durumu'].str.contains("Kör")]
             if r!="HEPSİ": df_a=df_a[df_a['Temsilcilik']==r]
             if s: df_a=df_a[df_a['Ad_Soyad'].str.contains(s, case=False, na=False)]
             ev = st.dataframe(df_a[['Sicil_No','Ad_Soyad','Temsilcilik']], on_select="rerun", selection_mode="single-row", use_container_width=True)
-            if len(ev.selection.rows)>0:
-                idx=ev.selection.rows[0]; admin_card(df_a.iloc[idx], df[df['Sicil_No']==df_a.iloc[idx]['Sicil_No']].index[0]+2, df_a.iloc[idx]['Sicil_No'], user, df.columns.tolist(), ws, ws_log, unique_refs)
+            if len(ev.selection.rows)>0: 
+                idx = ev.selection.rows[0]; admin_card(df_a.iloc[idx], df[df['Sicil_No']==df_a.iloc[idx]['Sicil_No']].index[0]+2, df_a.iloc[idx]['Sicil_No'], user, df.columns.tolist(), ws, ws_log, unique_refs)
         with t2:
             tr = st.selectbox("Hangi Referans?", ["Seç..."]+unique_refs)
             if tr!="Seç...":
@@ -279,7 +274,6 @@ else:
                 def clr(v): return f'background-color: {"#ffcdd2" if "Bekliyor" in str(v) else "#c8e6c9"}'
                 st.dataframe(df_g[['Sicil_No','Ad_Soyad','Calisma_Durumu']].style.map(clr, subset=['Calisma_Durumu']), use_container_width=True)
 
-    # 3. KÖR NOKTA ANALİZİ (V36'dan)
     elif menu == "📉 KÖR NOKTA":
         st.title("📉 Kör Nokta Analizi")
         sel_reg = st.selectbox("Bölge Analizi:", ["TÜMÜ"]+sorted(df['Temsilcilik'].unique().tolist()))
@@ -290,7 +284,6 @@ else:
         with t1: st.plotly_chart(px.bar(df_unt['Temsilcilik'].value_counts().reset_index(), x='count', y='Temsilcilik', orientation='h'), use_container_width=True)
         with t2: st.plotly_chart(px.bar(df_unt['Universite'].value_counts().head(15).reset_index(), x='count', y='Universite'), use_container_width=True)
 
-    # 4. AĞ HARİTASI
     elif menu == "🕸️ AĞ HARİTASI":
         st.title("🕸️ Ağ Haritası")
         try:
@@ -311,12 +304,10 @@ else:
             st.plotly_chart(fig, use_container_width=True)
         except: st.error("Kütüphane eksik")
 
-    # 5. DEMOGRAFİK
     elif menu == "🎓 DEMOGRAFİK":
         st.plotly_chart(px.pie(df, names='Yas_Grubu', title="Yaş Dağılımı"), use_container_width=True)
         st.plotly_chart(px.bar(df['Universite'].value_counts().head(10), title="Üniversiteler"), use_container_width=True)
 
-    # 6. YÖNETİCİ GİRİŞİ
     elif menu == "📝 YÖNETİCİ GİRİŞİ":
         st.header("📋 Detaylı Arama")
         s = st.text_input("Ara")
