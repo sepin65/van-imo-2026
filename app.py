@@ -8,7 +8,6 @@ from datetime import datetime
 import time
 import math
 import itertools
-from fpdf import FPDF # PDF Kütüphanesi
 
 # --- 1. SAYFA AYARLARI ---
 st.set_page_config(
@@ -133,9 +132,12 @@ def get_data():
 
 # --- PDF OLUŞTURMA FONKSİYONU ---
 def create_pdf(df_source, referans_adi):
-    # Türkçe karakterleri İngilizce'ye çevir (PDF Hatası almamak için)
+    from fpdf import FPDF # Hata buradaysa yakalamak için içeri aldık
+    
+    # Türkçe karakterleri İngilizce'ye çevir (Sağlamlaştırma)
     def tr_to_en(text):
-        if not isinstance(text, str): return str(text)
+        if text is None: return "" # Boş gelirse patlamasın
+        text = str(text) # Kesinlikle string yap
         tr_map = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C'}
         for tr, en in tr_map.items():
             text = text.replace(tr, en)
@@ -153,28 +155,29 @@ def create_pdf(df_source, referans_adi):
     pdf.ln(10)
     
     # Tablo Başlıkları
-    pdf.set_font("Arial", 'B', 9)
-    pdf.cell(20, 8, "Sicil", 1)
+    pdf.set_font("Arial", 'B', 8)
+    # Sütun Genişlikleri: Sicil(15), Ad(60), Tel(30), Durum(35), Kurum(40)
+    pdf.cell(15, 8, "Sicil", 1)
     pdf.cell(60, 8, "Ad Soyad", 1)
     pdf.cell(30, 8, "Telefon", 1)
-    pdf.cell(40, 8, "Durum", 1)
+    pdf.cell(35, 8, "Durum", 1)
     pdf.cell(40, 8, "Kurum", 1)
     pdf.ln()
     
     # Tablo Verileri
     pdf.set_font("Arial", size=8)
     for index, row in df_source.iterrows():
-        # Verileri hazırla
+        # Verileri hazırla ve temizle
         sicil = str(row['Sicil_No'])
-        ad = tr_to_en(str(row['Ad_Soyad']))[:25] # Uzun isimleri kes
+        ad = tr_to_en(str(row['Ad_Soyad']))[:30] # Uzun isimleri kes
         tel = str(row['Telefon'])
         durum = tr_to_en(row['Calisma_Durumu'])
-        kurum = tr_to_en(str(row['Kurum']))[:20]
+        kurum = tr_to_en(str(row['Kurum']))[:25]
         
-        pdf.cell(20, 7, sicil, 1)
+        pdf.cell(15, 7, sicil, 1)
         pdf.cell(60, 7, ad, 1)
         pdf.cell(30, 7, tel, 1)
-        pdf.cell(40, 7, durum, 1)
+        pdf.cell(35, 7, durum, 1)
         pdf.cell(40, 7, kurum, 1)
         pdf.ln()
         
@@ -340,7 +343,9 @@ if menu == "🤝 REFERANS YÖNETİMİ":
                         type="primary"
                     )
                 except Exception as e:
-                    st.warning("⚠️ PDF oluşturmak için 'requirements.txt' dosyasına 'fpdf' kütüphanesini eklemeniz gerekmektedir.")
+                    # Gerçek hatayı ekrana basar
+                    st.error(f"⚠️ PDF Oluşturma Hatası: {e}")
+                    st.warning("Lütfen 'requirements.txt' dosyasında 'fpdf' kütüphanesinin olduğundan ve uygulamanın yeniden başlatıldığından emin olun.")
 
             df_gorev_sorted = df_gorev.sort_values('Calisma_Durumu', ascending=True)
             cols_gorev = ['Sicil_No', 'Ad_Soyad', 'Telefon', 'Calisma_Durumu', 'Egilim', 'Kurum']
@@ -363,6 +368,5 @@ if menu == "🤝 REFERANS YÖNETİMİ":
 # =========================================================
 elif menu == "📉 'KÖR NOKTA' ANALİZİ" and user['Rol'] == 'ADMIN':
     st.title("📉 'Kör Nokta' Analizi")
-    # ... (Buraya V36'daki analiz kodları gelecek - Kod tekrarı olmaması için burayı kısa tuttum)
+    # ... (V36'daki kodlar buraya)
     pass
-# Diğer modüller de aynı şekilde V36 yapısında kalmalı
