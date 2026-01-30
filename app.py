@@ -43,14 +43,14 @@ def get_data():
         else:
             return pd.DataFrame(), None, pd.DataFrame(), None
 
-        # Sütun İsimlerini Eşleştir (Excel Başlıkları -> Kod Değişkenleri)
+        # Sütun İsimlerini Eşleştir
         rename_map = {
             'Üniversite': 'Universite',
-            'Doğum_Tarihi': 'Dogum_Tarihi', # Excel'deki isim
+            'Doğum_Tarihi': 'Dogum_Tarihi',
             'Eğilim': 'Egilim',
             'Ulaşım': 'Ulasim',
             'Temsilcilik': 'Temsilcilik',
-            'Tanıyanlar': 'Taniyanlar' # YENİ EKLENDİ (H Sütunu)
+            'Tanıyanlar': 'Taniyanlar'
         }
         df.rename(columns=rename_map, inplace=True)
 
@@ -60,52 +60,50 @@ def get_data():
 
         # --- VERİ TEMİZLİĞİ ---
         
-        # 1. Temsilcilik Düzeltme
+        # 1. Temsilcilik
         def fix_location(x):
             x = str(x).strip().upper()
             if x in ["-", "", "NONE", "NAN"] or len(x) < 3: return "VAN MERKEZ"
             return x
         df['Temsilcilik'] = df['Temsilcilik'].apply(fix_location)
 
-        # 2. Üniversite Düzeltme
+        # 2. Üniversite
         df['Universite'] = df['Universite'].str.upper().str.strip()
 
-        # 3. YAŞ HESAPLAMA (GELİŞMİŞ FORMAT - 11/02/1947 uyumlu)
+        # 3. YAŞ HESAPLAMA (GELİŞMİŞ)
         current_year = datetime.now().year
         
         def calculate_age_robust(date_str):
             date_str = str(date_str).strip()
-            if not date_str or date_str in ["-", "nan", "None"]:
-                return 0
-            
+            if not date_str or date_str in ["-", "nan", "None"]: return 0
             try:
-                # Format 1: 11/02/1947
                 if "/" in date_str:
                     dt = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
                     if pd.notnull(dt): return current_year - dt.year
-                
-                # Format 2: 11.02.1947
                 elif "." in date_str:
-                    dt = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+                    dt = pd.to_datetime(date_str, format="%d.%m.%Y", errors='coerce')
                     if pd.notnull(dt): return current_year - dt.year
-                
-                # Format 3: Sadece Yıl (1985)
                 elif len(date_str) == 4 and date_str.isdigit():
                     return current_year - int(date_str)
-                
                 return 0
-            except:
-                return 0
+            except: return 0
 
         df['Yas'] = df['Dogum_Tarihi'].apply(calculate_age_robust)
 
+        # --- YENİ YAŞ GRUPLAMA (5 YILLIK DİLİMLER) ---
         def group_age(age):
             if age == 0: return "Belirsiz"
-            if age < 30: return "20-29 (Genç)"
-            if age < 40: return "30-39 (Dinamik)"
-            if age < 50: return "40-49 (Olgun)"
-            if age < 60: return "50-59 (Kıdemli)"
-            return "60+ (Duayen)"
+            if age < 25: return "20-24"
+            if age < 30: return "25-29"
+            if age < 35: return "30-34"
+            if age < 40: return "35-39"
+            if age < 45: return "40-44"
+            if age < 50: return "45-49"
+            if age < 55: return "50-54"
+            if age < 60: return "55-59"
+            if age < 65: return "60-64"
+            return "65+"
+            
         df['Yas_Grubu'] = df['Yas'].apply(group_age)
 
         # 4. Sicil
@@ -133,13 +131,11 @@ def get_data():
         log_headers = ['Zaman', 'Sicil_No', 'Ad_Soyad', 'Kullanici', 'Kurum', 'Egilim', 'Gecmis_2024', 'Gecmis_2022', 'Temas_Durumu', 'Rakip_Ekleme', 'Ulasim', 'Cizikler', 'Taniyanlar']
         
         if not log_raw or (len(log_raw) > 0 and log_raw[0] != log_headers):
-            # Eğer başlıklar uyuşmuyorsa (yeni sütun eklendiyse) başlıkları güncellemeye çalış
             if len(log_raw) < 5:
                 ws_log.clear()
                 ws_log.append_row(log_headers)
                 df_log = pd.DataFrame(columns=log_headers)
             else:
-                 # Veri kaybı olmasın diye mevcut veriyi al, eksik sütunları boş geç
                  h = log_raw[0]
                  clean_h = [x if x.strip() != "" else f"Bos_{i}" for i, x in enumerate(h)]
                  df_log = pd.DataFrame(log_raw[1:], columns=clean_h)
@@ -177,7 +173,7 @@ if st.session_state.user is None:
             except: st.error("Bağlantı Hatası")
     st.stop()
 
-# --- FORM DIALOG (TANIYANLAR EKLENDİ) ---
+# --- FORM DIALOG ---
 @st.dialog("✏️ SEÇMEN KARTI")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
@@ -243,12 +239,10 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
             ]
             for col, val in updates:
                 target = col
-                # Excel'deki olası isimleri kontrol et
                 if col == 'Universite' and 'Üniversite' in df_cols: target = 'Üniversite'
                 if col == 'Temsilcilik' and 'Temsilcilik' in df_cols: target = 'Temsilcilik'
-                if col == 'Tanıyanlar' and 'Tanıyanlar' in df_cols: target = 'Tanıyanlar'
+                if col == 'Tanıyanlar' and 'Taniyanlar' in df_cols: target = 'Taniyanlar'
                 
-                # Sütun varsa güncelle
                 if col in df_cols: ws.update_cell(row_n, df_cols.index(col)+1, val)
                 elif target in df_cols: ws.update_cell(row_n, df_cols.index(target)+1, val)
             
@@ -273,12 +267,12 @@ if user['Rol'] == 'ADMIN':
 menu = st.sidebar.radio("Menü", menu_options)
 
 # =========================================================
-# 🎓 DEMOGRAFİK İSTİHBARAT (YAŞ FİLTRELİ)
+# 🎓 DEMOGRAFİK İSTİHBARAT (5 YILLIK DİLİMLER)
 # =========================================================
 if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
     st.title("🎓 Stratejik Demografi & İstihbarat")
     
-    # 0 yaş olanları analiz dışı bırak (Grafikleri bozmaması için)
+    # 0 yaş (Bilinmeyen) olanları analiz dışı bırak
     df_valid_age = df[df['Yas'] > 18]
 
     tab1, tab2, tab3 = st.tabs(["🏛️ ÜNİVERSİTE ANALİZİ", "🌍 BÖLGESEL DERİNLİK", "🏢 KURUMSAL İSTİHBARAT"])
@@ -303,7 +297,6 @@ if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
             c1, c2, c3 = st.columns(3)
             c1.metric("Kişi Sayısı", len(df_uni))
             
-            # Sadece yaşı olanların ortalaması
             valid_ages_uni = df_uni[df_uni['Yas'] > 18]['Yas']
             avg_age = valid_ages_uni.mean() if not valid_ages_uni.empty else 0
             c2.metric("Yaş Ortalaması", f"{int(avg_age) if avg_age > 0 else '-'}")
@@ -313,11 +306,17 @@ if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
 
             col_g1, col_g2 = st.columns(2)
             with col_g1:
-                st.caption(f"📊 {title} - Yaş Grupları")
-                # Sadece geçerli yaşları grafik yap
+                st.caption(f"📊 {title} - Yaş Aralıkları (5 Yıllık)")
                 df_pie = df_uni[df_uni['Yas'] > 18]
                 if not df_pie.empty:
-                    age_fig = px.pie(df_pie, names='Yas_Grubu', title=f"Yaş Dağılımı (Bilinmeyenler Hariç)", hole=0.4)
+                    # Yaş gruplarını sıralı göstermek için
+                    age_labels = ["20-24", "25-29", "30-34", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65+"]
+                    age_counts = df_pie['Yas_Grubu'].value_counts().reindex(age_labels, fill_value=0).reset_index()
+                    age_counts.columns = ['Yaş Aralığı', 'Kişi']
+                    # 0 olanları gösterme
+                    age_counts = age_counts[age_counts['Kişi'] > 0]
+                    
+                    age_fig = px.bar(age_counts, x='Yaş Aralığı', y='Kişi', title=f"Yaş Dağılımı", text_auto=True)
                     st.plotly_chart(age_fig, use_container_width=True)
                 else:
                     st.warning("Bu grupta yaş verisi olan kimse yok.")
@@ -327,6 +326,9 @@ if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
                 if 'Temsilcilik' in df_uni.columns:
                     loc_fig = px.bar(df_uni['Temsilcilik'].value_counts().reset_index(), x='Temsilcilik', y='count', title="Temsilciliklere Göre Dağılım")
                     st.plotly_chart(loc_fig, use_container_width=True)
+
+            with st.expander(f"📋 {title} Listesini Görüntüle"):
+                st.dataframe(df_uni[['Sicil_No', 'Ad_Soyad', 'Yas', 'Temsilcilik', 'Kurum']], use_container_width=True)
 
     # ---------------- TAB 2: BÖLGESEL DERİNLİK ----------------
     with tab2:
@@ -339,7 +341,6 @@ if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
         if target_region:
             df_reg = df[df['Temsilcilik'] == target_region]
             
-            # --- KPI ---
             c_r1, c_r2, c_r3 = st.columns(3)
             c_r1.metric("Üye Sayısı", len(df_reg))
             
@@ -365,11 +366,16 @@ if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
                     else: st.warning("Veri yok")
                 
             with col_d2:
-                st.markdown("**👶/👴 Kuşak Yapısı**")
-                # Sadece yaşı olanlar
+                st.markdown("**👶/👴 Yaş Yapısı**")
                 df_reg_age = df_reg[df_reg['Yas'] > 18]
                 if not df_reg_age.empty:
-                    fig_ra = px.pie(df_reg_age, names='Yas_Grubu', hole=0.4, height=350)
+                    # Bar grafik daha okunaklı olur
+                    age_labels = ["20-24", "25-29", "30-34", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65+"]
+                    age_counts_reg = df_reg_age['Yas_Grubu'].value_counts().reindex(age_labels, fill_value=0).reset_index()
+                    age_counts_reg.columns = ['Yaş Aralığı', 'Kişi']
+                    age_counts_reg = age_counts_reg[age_counts_reg['Kişi'] > 0]
+                    
+                    fig_ra = px.bar(age_counts_reg, x='Yaş Aralığı', y='Kişi', text_auto=True, height=350)
                     fig_ra.update_layout(margin=dict(l=0, r=0, t=0, b=0))
                     st.plotly_chart(fig_ra, use_container_width=True)
                 else:
@@ -385,7 +391,6 @@ if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
                         st.plotly_chart(fig_rk, use_container_width=True)
             
             with st.expander(f"📋 {target_region} Üye Listesi & Tanıyanlar"):
-                # Tanıyanlar sütunu eklendi
                 st.dataframe(df_reg[['Sicil_No', 'Ad_Soyad', 'Universite', 'Yas', 'Taniyanlar']], use_container_width=True)
 
     # ---------------- TAB 3: KURUMSAL İSTİHBARAT ----------------
@@ -411,6 +416,7 @@ if menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
             st.markdown(f"**{sel_kurum} - Yaş Grupları**")
             df_kurum_age = df_kurum[df_kurum['Yas'] > 18]
             if not df_kurum_age.empty:
+                # Kurumlar için Pie daha iyi olabilir
                 fig_ka = px.pie(df_kurum_age, names='Yas_Grubu', hole=0.5)
                 st.plotly_chart(fig_ka, use_container_width=True)
 
@@ -425,7 +431,6 @@ elif menu == "📊 GENEL ANALİZ" and user['Rol'] == 'ADMIN':
     kararsizlar = temas[temas['Egilim'].isin(["Kararsızım", "Kısmen Yazar"])]
     hedef_oy = int(len(df) / 2) + 1
     
-    # KPI
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Toplam Seçmen", len(df))
     c2.metric("Ulaşılan", len(temas), f"%{int(len(temas)/len(df)*100) if len(df)>0 else 0}")
@@ -465,7 +470,6 @@ elif menu == "📝 Veri Girişi":
     search = st.text_input("🔍 İsim Ara", value=st.session_state.search_term, key="widget_search", on_change=update_search)
     
     cols = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Temsilcilik', 'Kurum', 'Egilim', 'Taniyanlar']
-    # Mevcut sütunları filtrele
     final_cols = [c for c in cols if c in df.columns]
 
     if search:
