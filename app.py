@@ -128,7 +128,7 @@ if st.session_state.user is None:
     st.title("🏗️ İMO SEÇİM SİSTEMİ")
     with st.form("giris"):
         u = st.text_input("Kullanıcı"); p = st.text_input("Şifre", type="password")
-        if st.form_submit_button("Giriş"):
+        if st.form_submit_button("Giriş Yap"):
             try:
                 c = get_connection(); 
                 # Kullanıcıları al
@@ -184,25 +184,35 @@ df, ws, df_log, ws_log, unique_refs = get_data()
 if df.empty: st.warning("Yükleniyor..."); st.stop()
 
 # =========================================================
-# 👷‍♂️ SAHA PERSONELİ EKRANI (HATA DÜZELTİLDİ)
+# 👷‍♂️ SAHA PERSONELİ EKRANI (BÖLGE SEÇMELİ)
 # =========================================================
 if user['Rol'] != 'ADMIN':
-    # HATA KORUMASI: Eğer Ad_Soyad yoksa Kullanıcı Adını Kullan
+    # İsim Hatası Koruması
     display_name = user.get('Ad_Soyad', user.get('Kullanici_Adi', 'Kullanıcı'))
     
     st.header(f"👷‍♂️ Saha Paneli: {display_name}")
-    st.caption("Tanıdığın kişilerin yanındaki kutucuğu işaretle ve en alttaki 'KAYDET' butonuna bas.")
+    st.caption("Bulunduğun bölgeyi seç, listeyi filtrele, tanıdıklarını işaretle ve kaydet.")
     
     c1, c2 = st.columns([2,1])
     search = c1.text_input("🔍 İsim Ara", placeholder="Kişi adı...")
-    mode = c2.radio("Görünüm:", ["Tümü", "Tanınmayanlar"], horizontal=True)
     
+    # "Tanınmayanlar" yerine "Bölge Seçimi" geldi
+    regions = ["HEPSİ"] + sorted(df['Temsilcilik'].unique().tolist())
+    selected_region = c2.selectbox("📍 Bölge Filtrele:", regions)
+    
+    # Filtreleme
     df_saha = df.copy()
-    if mode == "Tanınmayanlar": df_saha = df_saha[df_saha['Taninma_Durumu'].str.contains("Kör")]
-    if search: df_saha = df_saha[df_saha['Ad_Soyad'].str.contains(search, case=False, na=False)]
+    if selected_region != "HEPSİ":
+        df_saha = df_saha[df_saha['Temsilcilik'] == selected_region]
+        
+    if search:
+        df_saha = df_saha[df_saha['Ad_Soyad'].str.contains(search, case=False, na=False)]
     
     cols_saha = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Dogum_Tarihi', 'Temsilcilik', 'Dogum_Yeri']
     df_saha['Tanıyorum'] = False
+    
+    # Tablo
+    st.info(f"📋 {selected_region} bölgesinde **{len(df_saha)}** kişi listeleniyor.")
     
     edited = st.data_editor(
         df_saha[['Tanıyorum'] + cols_saha].head(200),
@@ -220,7 +230,7 @@ if user['Rol'] != 'ADMIN':
                 if mask.any():
                     orig_idx = df.index[mask][0]; excel_row = orig_idx + 2
                     curr_val = df.at[orig_idx, 'Taniyanlar']
-                    my_name = display_name # Giriş yapan isim
+                    my_name = display_name 
                     if my_name not in str(curr_val):
                         new_val = f"{curr_val}, {my_name}" if curr_val else my_name
                         ws.update_cell(excel_row, df.columns.get_loc('Taniyanlar')+1, new_val)
