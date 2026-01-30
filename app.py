@@ -237,20 +237,21 @@ if df.empty:
 menu = st.sidebar.radio("Menü", ["📊 GENEL ANALİZ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"] if user['Rol']=='ADMIN' else ["📝 Veri Girişi"])
 
 # =========================================================
-# 🕸️ AĞ İSTİHBARATI (V29 - KÜÇÜK NOKTALAR)
+# 🕸️ AĞ İSTİHBARATI (V29 - GEPHI STİLİ KÜÇÜK NOKTALAR)
 # =========================================================
 if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
     st.title("🕸️ Ağ İstihbaratı ve Kümeler")
-    st.caption("Eğer hata alıyorsanız, lütfen 'requirements.txt' dosyasına 'scipy' ekleyin!")
+    st.caption("Büyük noktalar REFERANSLAR, etrafındaki renkli küçük toz bulutu ÜYELERDİR.")
 
     try:
         import networkx as nx
-        HAS_NETWORKX = True
+        import scipy # Kontrol için
+        HAS_DEPS = True
     except ImportError:
-        HAS_NETWORKX = False
-        st.error("⚠️ HATA: 'scipy' ve 'networkx' kütüphaneleri eksik. Lütfen requirements.txt dosyasına ekleyin.")
+        HAS_DEPS = False
+        st.error("⚠️ HATA: `scipy` ve `networkx` kütüphaneleri eksik. Lütfen `requirements.txt` dosyasına ekleyin.")
 
-    if HAS_NETWORKX and 'Taniyanlar' in df.columns:
+    if HAS_DEPS and 'Taniyanlar' in df.columns:
         # Veri Hazırlığı
         df_net = df[df['Taniyanlar'].str.len() > 1].copy()
         df_net['Ref_List'] = df_net['Taniyanlar'].astype(str).str.split(',')
@@ -261,39 +262,52 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
         # Referans Güçleri
         ref_counts = df_exploded['Ref_List'].value_counts()
         all_refs = ref_counts.index.tolist()
+        
+        # Sicil -> Temsilcilik Haritası (Renkler için)
+        sicil_to_temsil = dict(zip(df['Sicil_No'].astype(str), df['Temsilcilik']))
+        unique_temsil = df['Temsilcilik'].unique()
+        # Renk Paleti
+        colors = px.colors.qualitative.Dark24
+        temsil_color_map = {t: colors[i % len(colors)] for i, t in enumerate(unique_temsil)}
 
         # --- AĞ HARİTASI ---
-        st.subheader("Kesişim Kümesi (Venn Modeli)")
-        n_refs = st.slider("Gösterilecek En Güçlü Referans Sayısı", 3, 30, 5)
+        st.subheader("İlişki Ağı ve Kesişimler")
+        n_refs = st.slider("En Güçlü Kaç Referans Gösterilsin?", 3, 40, 10)
         
-        with st.spinner("Ağ haritası oluşturuluyor..."):
+        with st.spinner("Ağ haritası oluşturuluyor (Biraz zaman alabilir)..."):
             selected_refs = all_refs[:n_refs]
             
             G = nx.Graph()
             
-            # Referansları Ekle (Büyük)
+            # Referansları Ekle (Büyük Hub'lar)
             for ref in selected_refs:
                 G.add_node(ref, type='referrer', size=40, color='#D32F2F', label=ref)
                 
             # Üyeleri Ekle
             filtered = df_exploded[df_exploded['Ref_List'].isin(selected_refs)]
             
+            # Performans için: Eğer üye sayısı çok fazlaysa (örn 2000+) limitle
+            # if len(filtered) > 2000: st.warning("Çok fazla veri var, bazı noktalar gizlendi.")
+            
             for idx, row in filtered.iterrows():
                 sicil = str(row['Sicil_No'])
                 ref = row['Ref_List']
                 name = row['Ad_Soyad']
+                temsil = sicil_to_temsil.get(sicil, "Bilinmiyor")
+                color = temsil_color_map.get(temsil, '#ccc')
                 
                 # Küçük Nokta (Üye)
                 if not G.has_node(sicil):
-                    G.add_node(sicil, type='member', size=4, color='#1976D2', label=name)
+                    G.add_node(sicil, type='member', size=5, color=color, label=f"{name} ({temsil})")
                 
                 G.add_edge(ref, sicil)
             
-            # Layout (Yaylanma Algoritması - Kesişimleri merkeze çeker)
+            # Layout (Fizik Motoru)
+            # k değeri düğümler arası mesafeyi belirler. Düşük k = Daha sıkı kümeler
             try:
-                # scipy gerekli olduğu için try-except içine aldık
-                pos = nx.spring_layout(G, k=0.5, iterations=50, seed=42)
+                pos = nx.spring_layout(G, k=0.6/math.sqrt(len(G.nodes())), iterations=60, seed=42)
                 
+                # Kenarlar
                 edge_x, edge_y = [], []
                 for edge in G.edges():
                     x0, y0 = pos[edge[0]]
@@ -303,32 +317,37 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
 
                 edge_trace = go.Scatter(
                     x=edge_x, y=edge_y,
-                    line=dict(width=0.2, color='#ddd'),
+                    line=dict(width=0.2, color='rgba(150,150,150,0.3)'), # Çok silik çizgiler
                     hoverinfo='none', mode='lines')
 
+                # Referans Noktaları
                 ref_x, ref_y, ref_text = [], [], []
-                mem_x, mem_y, mem_text = [], [], []
-
                 for node in G.nodes():
-                    x, y = pos[node]
                     if G.nodes[node]['type'] == 'referrer':
+                        x, y = pos[node]
                         ref_x.append(x)
                         ref_y.append(y)
                         ref_text.append(G.nodes[node]['label'])
-                    else:
-                        mem_x.append(x)
-                        mem_y.append(y)
-                        mem_text.append(G.nodes[node]['label'])
 
                 ref_trace = go.Scatter(
                     x=ref_x, y=ref_y, mode='markers+text',
-                    text=ref_text, textposition="top center",
-                    marker=dict(size=25, color='red', line=dict(width=2, color='white')))
+                    text=ref_text, textposition="top center", textfont=dict(size=14, color='black', family="Arial Black"),
+                    marker=dict(size=30, color='red', line=dict(width=2, color='white'), symbol='circle'))
+
+                # Üye Noktaları
+                mem_x, mem_y, mem_text, mem_cols = [], [], [], []
+                for node in G.nodes():
+                    if G.nodes[node]['type'] == 'member':
+                        x, y = pos[node]
+                        mem_x.append(x)
+                        mem_y.append(y)
+                        mem_text.append(G.nodes[node]['label'])
+                        mem_cols.append(G.nodes[node]['color'])
 
                 mem_trace = go.Scatter(
                     x=mem_x, y=mem_y, mode='markers',
                     hovertext=mem_text, hoverinfo='text',
-                    marker=dict(size=5, color='blue', opacity=0.6))
+                    marker=dict(size=6, color=mem_cols, opacity=0.8, line=dict(width=0.5, color='white')))
 
                 fig = go.Figure(data=[edge_trace, mem_trace, ref_trace],
                                 layout=go.Layout(
@@ -336,12 +355,19 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
                                     margin=dict(b=0,l=0,r=0,t=0),
                                     xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                                     yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                    height=650
+                                    height=750,
+                                    plot_bgcolor='white'
                                 ))
                 st.plotly_chart(fig, use_container_width=True)
                 
+                # Lejant
+                st.caption("Küme Renkleri (Bölgeler):")
+                cols = st.columns(len(unique_temsil))
+                for i, t in enumerate(unique_temsil):
+                    cols[i].markdown(f"<span style='color:{temsil_color_map[t]}'>●</span> {t}", unsafe_allow_html=True)
+                
             except Exception as e:
-                st.error(f"Harita oluşturulamadı. Lütfen 'scipy' kütüphanesini yüklediğinizden emin olun. Hata: {e}")
+                st.error(f"Harita hatası: {e}")
 
 # =========================================================
 # 🎓 DEMOGRAFİK İSTİHBARAT
@@ -404,7 +430,7 @@ elif menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
 # GENEL ANALİZ
 # =========================================================
 elif menu == "📊 GENEL ANALİZ" and user['Rol'] == 'ADMIN':
-    st.title("📊 Genel Durum")
+    st.title("📊 Seçim Komuta Masası")
     temas = df[df['Egilim'].str.len() > 1]
     bizim = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     c1, c2, c3 = st.columns(3)
