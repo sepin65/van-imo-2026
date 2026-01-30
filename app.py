@@ -52,11 +52,11 @@ def get_data():
         }
         df.rename(columns=rename_map, inplace=True)
 
-        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon', 'Universite', 'Dogum_Tarihi', 'Temsilcilik', 'Taniyanlar']
+        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon', 'Universite', 'Dogum_Yili', 'Temsilcilik', 'Taniyanlar']
         for col in required_cols:
             if col not in df.columns: df[col] = ""
 
-        # Veri Temizliği
+        # --- VERİ TEMİZLİĞİ ---
         def fix_location(x):
             x = str(x).strip().upper()
             if x in ["-", "", "NONE", "NAN"] or len(x) < 3: return "VAN MERKEZ"
@@ -64,22 +64,20 @@ def get_data():
         df['Temsilcilik'] = df['Temsilcilik'].apply(fix_location)
         df['Universite'] = df['Universite'].str.upper().str.strip()
 
+        # Yaş
         current_year = datetime.now().year
         def calculate_age_robust(date_str):
             date_str = str(date_str).strip()
             if not date_str or date_str in ["-", "nan", "None"]: return 0
             try:
-                if "/" in date_str:
-                    dt = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
-                    if pd.notnull(dt): return current_year - dt.year
-                elif "." in date_str:
-                    dt = pd.to_datetime(date_str, format="%d.%m.%Y", errors='coerce')
-                    if pd.notnull(dt): return current_year - dt.year
-                elif len(date_str) == 4 and date_str.isdigit():
-                    return current_year - int(date_str)
+                if "/" in date_str: dt = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+                elif "." in date_str: dt = pd.to_datetime(date_str, format="%d.%m.%Y", errors='coerce')
+                elif len(date_str) == 4 and date_str.isdigit(): return current_year - int(date_str)
+                else: return 0
+                if pd.notnull(dt): return current_year - dt.year
                 return 0
             except: return 0
-        df['Yas'] = df['Dogum_Tarihi'].apply(calculate_age_robust)
+        df['Yas'] = df['Dogum_Yili'].apply(calculate_age_robust)
 
         def group_age(age):
             if age == 0: return "Belirsiz"
@@ -95,6 +93,7 @@ def get_data():
             return "65+"
         df['Yas_Grubu'] = df['Yas'].apply(group_age)
 
+        # Sicil
         def clean_sicil(x):
             try: return int(str(x).replace(".", "").replace(" ", ""))
             except: return 999999 
@@ -108,7 +107,7 @@ def get_data():
             ])
         except: df['Sandik_No'] = "Belirsiz"
 
-        # Log İşlemleri
+        # --- LOGLAR ---
         try:
             ws_log = sheet.worksheet("log_kayitlari")
         except:
@@ -162,7 +161,6 @@ if st.session_state.user is None:
 @st.dialog("✏️ SEÇMEN KARTI")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
-    
     yas = kisi.get('Yas', 0)
     uni = kisi.get('Universite', '')
     temsil = kisi.get('Temsilcilik', 'VAN MERKEZ')
@@ -239,54 +237,65 @@ if df.empty:
 menu = st.sidebar.radio("Menü", ["📊 GENEL ANALİZ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"] if user['Rol']=='ADMIN' else ["📝 Veri Girişi"])
 
 # =========================================================
-# 🕸️ AĞ İSTİHBARATI (KÜMELEME)
+# 🕸️ AĞ İSTİHBARATI (V27 - KESİŞİM KÜMELERİ)
 # =========================================================
 if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
-    st.title("🕸️ Ağ İstihbaratı & Kümeleme")
-    st.info("Kırmızı hata alıyorsanız `requirements.txt` dosyasına `networkx` ekleyin.")
+    st.title("🕸️ Ağ İstihbaratı & Kesişim Kümeleri")
+    st.info("Büyük noktalar REFERANSLAR, küçük noktalar ÜYELERDİR. Ortada birikenler ortak tanıdıklardır.")
 
-    # 1. Networkx Kütüphanesi Kontrolü (Hata vermemesi için try-except)
     try:
         import networkx as nx
         HAS_NETWORKX = True
     except ImportError:
         HAS_NETWORKX = False
-        st.error("⚠️ 'networkx' kütüphanesi yüklü değil! requirements.txt dosyasına ekleyin.")
+        st.error("⚠️ 'networkx' kütüphanesi eksik! requirements.txt'ye ekleyin.")
 
     if HAS_NETWORKX and 'Taniyanlar' in df.columns:
+        # Veri Hazırlığı: Sicil -> Referans eşleşmesi
         df_net = df[df['Taniyanlar'].str.len() > 1].copy()
         df_net['Ref_List'] = df_net['Taniyanlar'].astype(str).str.split(',')
         df_exploded = df_net.explode('Ref_List')
         df_exploded['Ref_List'] = df_exploded['Ref_List'].str.strip()
         df_exploded = df_exploded[df_exploded['Ref_List'].str.len() > 1]
         
+        # Sicil No'dan İsim Bulma Sözlüğü
+        sicil_to_name = dict(zip(df['Sicil_No'].astype(str), df['Ad_Soyad']))
         all_refs = sorted(df_exploded['Ref_List'].unique())
 
-        tab1, tab2 = st.tabs(["🕸️ İLİŞKİ AĞI HARİTASI", "🏆 REFERANS GÜCÜ"])
+        tab1, tab2 = st.tabs(["🕸️ KESİŞİM HARİTASI", "🏆 REFERANS GÜCÜ"])
 
         with tab1:
-            st.subheader("Kim Kiminle Kesişiyor?")
-            selected_refs = st.multiselect("Haritaya Eklenecek Kişiler:", all_refs, default=all_refs[:10])
+            st.subheader("Kesişim Kümesi Haritası")
+            selected_refs = st.multiselect("Analiz Edilecek Referansları Seçin:", all_refs, default=all_refs[:3] if len(all_refs)>3 else all_refs)
             
-            if len(selected_refs) > 1:
+            if len(selected_refs) > 0:
                 G = nx.Graph()
-                # Düğümler
+                
+                # 1. Referansları (Büyük Noktalar) Ekle
                 for ref in selected_refs:
-                    count = len(df_exploded[df_exploded['Ref_List'] == ref])
-                    G.add_node(ref, size=count)
+                    G.add_node(ref, type='referrer', size=30, color='red')
+                    
+                # 2. Üyeleri (Küçük Noktalar) ve Bağlantıları Ekle
+                # Sadece seçili referansların tanıdığı üyeleri al
+                filtered_exploded = df_exploded[df_exploded['Ref_List'].isin(selected_refs)]
                 
-                # Kenarlar (Kesişim)
-                import itertools
-                for r1, r2 in itertools.combinations(selected_refs, 2):
-                    s1 = set(df_exploded[df_exploded['Ref_List'] == r1]['Sicil_No'])
-                    s2 = set(df_exploded[df_exploded['Ref_List'] == r2]['Sicil_No'])
-                    common = len(s1.intersection(s2))
-                    if common > 0:
-                        G.add_edge(r1, r2, weight=common)
-                
-                pos = nx.spring_layout(G, seed=42)
-                
-                # Çizim
+                for index, row in filtered_exploded.iterrows():
+                    sicil = str(row['Sicil_No'])
+                    ref = row['Ref_List']
+                    member_name = sicil_to_name.get(sicil, f"Sicil: {sicil}")
+                    
+                    # Üye düğümünü ekle (Küçük nokta)
+                    if not G.has_node(sicil):
+                        G.add_node(sicil, type='member', size=5, color='blue', label=member_name)
+                    
+                    # Bağlantıyı ekle (Referans <-> Üye)
+                    G.add_edge(ref, sicil)
+
+                # Layout Hesapla (Spring Layout - Kesişimleri merkeze çeker)
+                pos = nx.spring_layout(G, k=0.5, iterations=50, seed=42)
+
+                # --- ÇİZİM (PLOTLY) ---
+                # Kenarlar (Çizgiler)
                 edge_x, edge_y = [], []
                 for edge in G.edges():
                     x0, y0 = pos[edge[0]]
@@ -294,34 +303,61 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
                     edge_x.extend([x0, x1, None])
                     edge_y.extend([y0, y1, None])
 
-                edge_trace = go.Scatter(x=edge_x, y=edge_y, line=dict(width=0.5, color='#888'), hoverinfo='none', mode='lines')
+                edge_trace = go.Scatter(
+                    x=edge_x, y=edge_y,
+                    line=dict(width=0.5, color='#ccc'),
+                    hoverinfo='none',
+                    mode='lines')
 
-                node_x, node_y, node_text, node_size = [], [], [], []
+                # Referans Noktaları (Büyük, İsimli)
+                ref_x, ref_y, ref_text = [], [], []
                 for node in G.nodes():
-                    x, y = pos[node]
-                    node_x.append(x)
-                    node_y.append(y)
-                    c = G.nodes[node]['size']
-                    node_text.append(f"{node}: {c} Kişi")
-                    node_size.append(15 + c)
+                    if G.nodes[node]['type'] == 'referrer':
+                        x, y = pos[node]
+                        ref_x.append(x)
+                        ref_y.append(y)
+                        ref_text.append(node)
+                
+                ref_trace = go.Scatter(
+                    x=ref_x, y=ref_y,
+                    mode='markers+text',
+                    text=ref_text, textposition="top center",
+                    hoverinfo='text',
+                    marker=dict(size=25, color='rgba(255, 0, 0, 0.8)', line=dict(width=2, color='DarkRed')))
 
-                node_trace = go.Scatter(
-                    x=node_x, y=node_y, mode='markers+text',
-                    text=[node for node in G.nodes()], textposition="bottom center",
-                    hovertext=node_text,
-                    marker=dict(showscale=True, colorscale='YlGnBu', size=node_size, color=node_size))
+                # Üye Noktaları (Küçük, Sadece Hover'da isim)
+                mem_x, mem_y, mem_hover = [], [], []
+                for node in G.nodes():
+                    if G.nodes[node]['type'] == 'member':
+                        x, y = pos[node]
+                        mem_x.append(x)
+                        mem_y.append(y)
+                        mem_hover.append(G.nodes[node]['label'])
+                
+                mem_trace = go.Scatter(
+                    x=mem_x, y=mem_y,
+                    mode='markers',
+                    hovertext=mem_hover, hoverinfo='text',
+                    marker=dict(size=6, color='rgba(0, 100, 255, 0.6)', line=dict(width=0)))
 
-                fig = go.Figure(data=[edge_trace, node_trace],
-                                layout=go.Layout(showlegend=False, hovermode='closest', margin=dict(b=0,l=0,r=0,t=0),
-                                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)))
+                fig = go.Figure(data=[edge_trace, mem_trace, ref_trace],
+                                layout=go.Layout(
+                                    showlegend=False, hovermode='closest',
+                                    margin=dict(b=0,l=0,r=0,t=0),
+                                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                    height=600
+                                ))
                 st.plotly_chart(fig, use_container_width=True)
-            else: st.warning("En az 2 kişi seçin.")
+                st.caption(f"Haritada {len(ref_x)} referans ve {len(mem_x)} tekil üye gösteriliyor.")
+
+            else:
+                st.warning("Lütfen en az 1 referans seçin.")
 
         with tab2:
             ref_counts = df_exploded['Ref_List'].value_counts().reset_index()
-            ref_counts.columns = ['Referans', 'Sayı']
-            st.plotly_chart(px.bar(ref_counts.head(20), x='Sayı', y='Referans', orientation='h'), use_container_width=True)
+            ref_counts.columns = ['Referans', 'Tanıdığı Kişi Sayısı']
+            st.plotly_chart(px.bar(ref_counts.head(20), x='Tanıdığı Kişi Sayısı', y='Referans', orientation='h'), use_container_width=True)
 
 # =========================================================
 # 🎓 DEMOGRAFİK İSTİHBARAT
@@ -333,7 +369,7 @@ elif menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
     with tab1:
         if 'Universite' in df.columns:
             uni_list = sorted([u for u in df['Universite'].unique() if len(str(u)) > 2])
-            selected_uni = st.selectbox("Üniversite:", ["TÜMÜ"] + uni_list)
+            selected_uni = st.selectbox("Üniversite Seçin:", ["TÜMÜ"] + uni_list)
             df_uni = df[df['Universite'] == selected_uni] if selected_uni != "TÜMÜ" else df[df['Universite'].str.len() > 2]
             
             c1, c2, c3 = st.columns(3)
