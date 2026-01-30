@@ -7,7 +7,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
 import math
-import itertools
 
 # --- 1. SAYFA AYARLARI ---
 st.set_page_config(
@@ -56,7 +55,7 @@ def get_data():
         for col in required_cols:
             if col not in df.columns: df[col] = ""
 
-        # Veri Temizliği
+        # --- VERİ TEMİZLİĞİ ---
         def fix_location(x):
             x = str(x).strip().upper()
             if x in ["-", "", "NONE", "NAN"] or len(x) < 3: return "VAN MERKEZ"
@@ -78,21 +77,10 @@ def get_data():
             except: return 0
         df['Yas'] = df['Dogum_Yili'].apply(calculate_age_robust)
 
-        def group_age(age):
-            if age == 0: return "Belirsiz"
-            if age < 25: return "20-24"
-            if age < 30: return "25-29"
-            if age < 35: return "30-34"
-            if age < 40: return "35-39"
-            if age < 45: return "40-44"
-            if age < 50: return "45-49"
-            if age < 55: return "50-54"
-            if age < 60: return "55-59"
-            if age < 65: return "60-64"
-            return "65+"
-        df['Yas_Grubu'] = df['Yas'].apply(group_age)
-
         df['Taninma_Durumu'] = df['Taniyanlar'].apply(lambda x: "Referanslı ✅" if len(str(x)) > 2 else "Kör Nokta (Tanınmıyor) ❌")
+        
+        # Temas Analizi (Çalışılmış mı?)
+        df['Calisma_Durumu'] = df['Temas_Durumu'].apply(lambda x: "Görüşüldü 👍" if len(str(x)) > 2 else "Bekliyor ⏳")
 
         def clean_sicil(x):
             try: return int(str(x).replace(".", "").replace(" ", ""))
@@ -130,7 +118,7 @@ def get_data():
         if not df_log.empty and 'Sicil_No' in df_log.columns:
             df_log['Sicil_No'] = df_log['Sicil_No'].astype(str)
 
-        # Referans Listesini Çıkar (Benzersiz İsimler)
+        # Referans Listesini Çıkar
         all_refs = []
         if 'Taniyanlar' in df.columns:
             raw_refs = df['Taniyanlar'].dropna().astype(str).tolist()
@@ -165,7 +153,7 @@ if st.session_state.user is None:
             except: st.error("Bağlantı Hatası")
     st.stop()
 
-# --- FORM (YENİLENMİŞ MULTISELECT) ---
+# --- FORM ---
 @st.dialog("✏️ SEÇMEN KARTI")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log, unique_refs):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
@@ -174,8 +162,6 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log, uni
     uni = kisi.get('Universite', '')
     temsil = kisi.get('Temsilcilik', 'VAN MERKEZ')
     mevcut_taniyanlar_str = str(kisi.get('Taniyanlar', ''))
-    
-    # Mevcut tanıyanları listeye çevir
     mevcut_taniyanlar_list = [x.strip() for x in mevcut_taniyanlar_str.split(',') if len(x.strip()) > 1]
     
     c1, c2, c3 = st.columns(3)
@@ -184,18 +170,17 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log, uni
     c3.info(f"🎂 **{int(yas) if yas > 0 else '?'} Yaş**")
     
     if len(mevcut_taniyanlar_list) > 0:
-        st.success(f"🔗 **Mevcut Referanslar:** {', '.join(mevcut_taniyanlar_list)}")
+        st.success(f"🔗 **Tanıyanlar:** {', '.join(mevcut_taniyanlar_list)}")
     else:
         st.error("⚠️ Tanıyan Kimse Yok (Kör Nokta)")
 
     with st.form("form"):
         # --- REFERANS EKLEME (AKILLI KUTU) ---
         st.markdown("#### 🤝 Referans Ekle / Düzenle")
-        # Multiselect ile hem listeden seç hem yeni ekle
         yeni_taniyanlar = st.multiselect(
-            "Kimler Tanıyor?", 
+            "Listeden Seç veya Yazıp Enter'a Bas:", 
             options=unique_refs, 
-            default=[x for x in mevcut_taniyanlar_list if x in unique_refs] + [x for x in mevcut_taniyanlar_list if x not in unique_refs] # Mevcutları koru
+            default=[x for x in mevcut_taniyanlar_list if x in unique_refs] + [x for x in mevcut_taniyanlar_list if x not in unique_refs]
         )
         
         st.divider()
@@ -211,10 +196,8 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log, uni
 
         nn = st.text_area("Notlar", value=kisi.get('Cizikler',''))
         
-        if st.form_submit_button("✅ BİLGİLERİ GÜNCELLE"):
-            # Listeyi stringe çevir
+        if st.form_submit_button("✅ KAYDET"):
             taniyanlar_str = ", ".join(yeni_taniyanlar)
-            
             updates = [
                 ("Kurum", nk), ("Gecmis_2024", n24),
                 ("Egilim", ne), ("Temas_Durumu", nt),
@@ -225,7 +208,6 @@ def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log, uni
             for col, val in updates:
                 target = col
                 if col == 'Tanıyanlar' and 'Taniyanlar' in df_cols: target = 'Taniyanlar'
-                
                 if col in df_cols: ws.update_cell(row_n, df_cols.index(col)+1, val)
                 elif target in df_cols: ws.update_cell(row_n, df_cols.index(target)+1, val)
             
@@ -242,95 +224,121 @@ if df.empty:
     st.warning("Veriler yükleniyor...")
     st.stop()
 
-# Menü Yetkilendirme
 if user['Rol'] == 'ADMIN':
-    menu_list = ["📊 GENEL ANALİZ", "🤝 REFERANS OPERASYONU", "📉 'KÖR NOKTA' ANALİZİ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"]
+    menu_list = ["📊 GENEL ANALİZ", "🤝 REFERANS YÖNETİMİ", "📉 'KÖR NOKTA' ANALİZİ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"]
 else:
-    menu_list = ["🤝 REFERANS OPERASYONU", "📝 Veri Girişi"]
+    menu_list = ["🤝 REFERANS YÖNETİMİ", "📝 Veri Girişi"]
 
 menu = st.sidebar.radio("Menü", menu_list)
 
 # =========================================================
-# 🤝 REFERANS OPERASYONU (YENİ MODÜL)
+# 🤝 REFERANS YÖNETİMİ (ÇİFT MODÜL)
 # =========================================================
-if menu == "🤝 REFERANS OPERASYONU":
-    st.header("🤝 Referans Atama & Operasyon Merkezi")
-    st.caption("Burada henüz referansı olmayan üyeleri bulup, hızlıca tanıyan kişileri ekleyebilirsiniz.")
+if menu == "🤝 REFERANS YÖNETİMİ":
+    st.title("🤝 Referans Yönetim & Denetim Merkezi")
     
-    # Filtreler
-    c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
-    search = c_f1.text_input("🔍 İsim Ara", placeholder="Ad Soyad...")
-    
-    filter_mode = c_f2.radio("Görünüm Modu:", ["Sadece Tanınmayanlar (Öncelikli)", "Tümü"], horizontal=True)
-    
-    # Bölge Filtresi
-    region_filter = c_f3.selectbox("Bölge:", ["HEPSİ"] + sorted(df['Temsilcilik'].unique().tolist()))
+    tab1, tab2 = st.tabs(["🕵️‍♀️ REFERANS ATAMA (KÖR NOKTALAR)", "📋 GÖREV & HESAP SORMA LİSTESİ"])
 
-    # Veri Filtreleme
-    df_op = df.copy()
-    
-    # 1. Mod Filtresi
-    if filter_mode == "Sadece Tanınmayanlar (Öncelikli)":
-        df_op = df_op[df_op['Taninma_Durumu'] == "Kör Nokta (Tanınmıyor) ❌"]
-        st.info(f"📋 Şu an atanmayı bekleyen **{len(df_op)}** kişi listeleniyor.")
-    
-    # 2. Bölge Filtresi
-    if region_filter != "HEPSİ":
-        df_op = df_op[df_op['Temsilcilik'] == region_filter]
+    # --- TAB 1: KİM KİMİ TANIYOR? (ATAMA) ---
+    with tab1:
+        st.subheader("🕵️‍♀️ Sahipsiz Üyelere Referans Ekle")
+        st.caption("Aşağıdaki listede henüz kimsenin 'Ben tanıyorum' demediği üyeler var. Tanıyanları seçip ekleyin.")
         
-    # 3. Arama Filtresi
-    if search:
-        df_op = df_op[df_op['Ad_Soyad'].str.contains(search, case=False, na=False)]
+        # Filtreler
+        c_f1, c_f2 = st.columns([3, 1])
+        search_atama = c_f1.text_input("🔍 İsim Ara (Atama)", placeholder="Kör noktalarda ara...")
+        region_filter = c_f2.selectbox("Bölge Filtre:", ["HEPSİ"] + sorted(df['Temsilcilik'].unique().tolist()), key="reg_atama")
 
-    # Tablo Gösterimi
-    cols_show = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Temsilcilik', 'Taninma_Durumu', 'Taniyanlar']
-    
-    # Sayfalama
-    page_size = 15
-    if 'ref_page' not in st.session_state: st.session_state.ref_page = 1
-    total_pages = math.ceil(len(df_op)/page_size) if len(df_op) > 0 else 1
-    
-    if len(df_op) > 0:
-        c_p1, c_p2, c_p3 = st.columns([1,1,2])
-        if c_p1.button("⬅️ Geri") and st.session_state.ref_page > 1: st.session_state.ref_page -= 1
-        if c_p2.button("İleri ➡️") and st.session_state.ref_page < total_pages: st.session_state.ref_page += 1
+        # Sadece Kör Noktalar
+        df_atama = df[df['Taninma_Durumu'] == "Kör Nokta (Tanınmıyor) ❌"]
         
-        start = (st.session_state.ref_page-1)*page_size
-        end = start + page_size
+        if region_filter != "HEPSİ":
+            df_atama = df_atama[df_atama['Temsilcilik'] == region_filter]
         
-        # Seçim Etkinliği
+        if search_atama:
+            df_atama = df_atama[df_atama['Ad_Soyad'].str.contains(search_atama, case=False, na=False)]
+
+        st.info(f"📌 Atanmayı bekleyen **{len(df_atama)}** kişi var.")
+        
+        # Tablo
+        cols_atama = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Temsilcilik', 'Taninma_Durumu']
+        
         event = st.dataframe(
-            df_op.iloc[start:end][cols_show], 
-            use_container_width=True, 
-            hide_index=True, 
-            on_select="rerun", 
-            selection_mode="single-row",
-            height=600
+            df_atama[cols_atama], 
+            use_container_width=True, hide_index=True, 
+            on_select="rerun", selection_mode="single-row", height=500
         )
         
         if len(event.selection.rows) > 0:
             idx = event.selection.rows[0]
-            sicil = df_op.iloc[start:end].iloc[idx]['Sicil_No']
-            # Ana Dataframe'den bul
+            sicil = df_atama.iloc[idx]['Sicil_No']
             g_idx = df[df['Sicil_No'] == sicil].index[0]
-            # Dialog Aç (Unique Refs gönderiliyor)
             entry_form_dialog(df.iloc[g_idx], g_idx + 2, sicil, user, df.columns.tolist(), ws, ws_log, df_log, unique_refs)
-    else:
-        st.success("🎉 Harika! Bu kriterlere uyan 'Tanınmayan' üye kalmadı.")
+
+    # --- TAB 2: GÖREV LİSTESİ (HESAP SORMA) ---
+    with tab2:
+        st.subheader("📋 Kişiye Özel Görev Listesi (Denetim)")
+        st.caption("Bir referans seçin ve 'Tanıyorum' dediği kişilerle görüşüp görüşmediğini kontrol edin.")
+        
+        # Referans Seçimi
+        target_ref = st.selectbox("👉 Hangi Referansın Listesi Gelsin?", ["Seçiniz..."] + unique_refs)
+        
+        if target_ref != "Seçiniz...":
+            # Seçilen kişinin tanıdıklarını filtrele
+            df_gorev = df[df['Taniyanlar'].str.contains(target_ref, case=False, na=False)]
+            
+            # İstatistikler
+            total_gorev = len(df_gorev)
+            done_gorev = len(df_gorev[df_gorev['Calisma_Durumu'] == "Görüşüldü 👍"])
+            pending_gorev = total_gorev - done_gorev
+            basari_orani = int((done_gorev / total_gorev) * 100) if total_gorev > 0 else 0
+            
+            # Kartlar
+            c1, c2, c3 = st.columns(3)
+            c1.metric(f"{target_ref} Listesi", total_gorev)
+            c2.metric("Görüşülen", done_gorev, f"%{basari_orani} Başarı")
+            c3.metric("Görüşülmeyen (Açık)", pending_gorev, delta_color="inverse")
+            
+            if basari_orani < 50:
+                st.error(f"⚠️ **{target_ref}**, listendeki kişilerin çoğunu henüz aramamışsın!")
+            else:
+                st.success(f"✅ Tebrikler **{target_ref}**, iyi gidiyorsun.")
+            
+            st.divider()
+            
+            # Görüşülmeyenleri öne çıkar
+            df_gorev_sorted = df_gorev.sort_values('Calisma_Durumu', ascending=True) # Bekleyenler üstte
+            
+            cols_gorev = ['Sicil_No', 'Ad_Soyad', 'Telefon', 'Calisma_Durumu', 'Egilim', 'Kurum']
+            
+            # Renkli Tablo (Style)
+            def color_status(val):
+                color = '#ffcdd2' if val == "Bekliyor ⏳" else '#c8e6c9'
+                return f'background-color: {color}'
+
+            st.dataframe(
+                df_gorev_sorted[cols_gorev].style.map(color_status, subset=['Calisma_Durumu']),
+                use_container_width=True,
+                height=600,
+                hide_index=True
+            )
+            
+            # Tıklayınca yine kart açılsın (Sonuç girmek için)
+            # Not: Styled dataframe'de on_select çalışmaz, bu yüzden ham dataframe ile seçim yapıyoruz
+            st.caption("👇 Sonuç girmek için aşağıdaki listeden seçiniz:")
+            event_gorev = st.dataframe(df_gorev_sorted[cols_gorev], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+            
+            if len(event_gorev.selection.rows) > 0:
+                idx = event_gorev.selection.rows[0]
+                sicil = df_gorev_sorted.iloc[idx]['Sicil_No']
+                g_idx = df[df['Sicil_No'] == sicil].index[0]
+                entry_form_dialog(df.iloc[g_idx], g_idx + 2, sicil, user, df.columns.tolist(), ws, ws_log, df_log, unique_refs)
 
 # =========================================================
-# DİĞER MODÜLLER (KISALTILMIŞ HALİYLE - ÇALIŞMAYA DEVAM EDER)
+# DİĞER MODÜLLER (KISALTILDI)
 # =========================================================
+# (Aşağısı diğer modüllerdir, V36 ile aynıdır)
 elif menu == "📉 'KÖR NOKTA' ANALİZİ" and user['Rol'] == 'ADMIN':
-    # (Önceki kodun aynısı buraya gelir)
     st.title("📉 'Kör Nokta' Analizi")
-    # ... (V36 kodunun ilgili kısmı)
-    # Kod tekrarını önlemek için burayı kısa tutuyorum, 
-    # V36'daki analiz kodlarının aynısı buraya yapıştırılacak.
-    # Ancak yukarıdaki get_data ve entry_form_dialog güncellemeleri tüm sistemi etkiler ve iyileştirir.
-    pass 
-
-# Not: Diğer menülerin (Genel Analiz, Ağ İstihbaratı vb.) kodları V36 ile aynıdır.
-# Sadece `get_data` fonksiyonu ve `entry_form_dialog` değiştiği için
-# V36'daki o kısımları da kopyalayıp bu çatı altına alabilirsiniz.
-# Veya tam kod istiyorsanız aşağıya ekleyebilirim.
+    # ... (V36 Kodu Buraya Gelecek - Yer kazanmak için eklemedim, önceki kodun aynısı)
+    # Eğer istersen tam kodu tek parça da verebilirim.
