@@ -131,22 +131,14 @@ if st.session_state.user is None:
         if st.form_submit_button("Giriş Yap"):
             try:
                 c = get_connection(); 
-                # Kullanıcıları al
                 users_ws = c.open("Van_IMO_Secim_2026").worksheet("kullanicilar")
                 users_data = users_ws.get_all_records()
                 ur = pd.DataFrame(users_data)
-                
-                # Sütun adı düzeltme (Ad Soyad -> Ad_Soyad)
                 ur.rename(columns={'Ad Soyad': 'Ad_Soyad', 'isim': 'Ad_Soyad', 'İsim': 'Ad_Soyad'}, inplace=True)
-                
                 login = ur[ur['Kullanici_Adi'] == u]
-                
                 if not login.empty and str(login.iloc[0]['Sifre']) == p:
                     user_dict = login.iloc[0].to_dict()
-                    # Eğer hala Ad_Soyad yoksa, Kullanıcı Adını kopyala
-                    if 'Ad_Soyad' not in user_dict:
-                        user_dict['Ad_Soyad'] = user_dict['Kullanici_Adi']
-                    
+                    if 'Ad_Soyad' not in user_dict: user_dict['Ad_Soyad'] = user_dict['Kullanici_Adi']
                     st.session_state.user = user_dict
                     st.rerun()
                 else: st.error("Hatalı Giriş")
@@ -184,43 +176,76 @@ df, ws, df_log, ws_log, unique_refs = get_data()
 if df.empty: st.warning("Yükleniyor..."); st.stop()
 
 # =========================================================
-# 👷‍♂️ SAHA PERSONELİ EKRANI (BÖLGE SEÇMELİ)
+# 👷‍♂️ SAHA PERSONELİ EKRANI (BÖLGE SEÇMELİ & SAYFALAMA)
 # =========================================================
 if user['Rol'] != 'ADMIN':
-    # İsim Hatası Koruması
     display_name = user.get('Ad_Soyad', user.get('Kullanici_Adi', 'Kullanıcı'))
-    
     st.header(f"👷‍♂️ Saha Paneli: {display_name}")
     st.caption("Bulunduğun bölgeyi seç, listeyi filtrele, tanıdıklarını işaretle ve kaydet.")
     
+    # FİLTRELER
     c1, c2 = st.columns([2,1])
     search = c1.text_input("🔍 İsim Ara", placeholder="Kişi adı...")
-    
-    # "Tanınmayanlar" yerine "Bölge Seçimi" geldi
     regions = ["HEPSİ"] + sorted(df['Temsilcilik'].unique().tolist())
     selected_region = c2.selectbox("📍 Bölge Filtrele:", regions)
     
-    # Filtreleme
+    # Veri Hazırlığı
     df_saha = df.copy()
-    if selected_region != "HEPSİ":
-        df_saha = df_saha[df_saha['Temsilcilik'] == selected_region]
-        
-    if search:
-        df_saha = df_saha[df_saha['Ad_Soyad'].str.contains(search, case=False, na=False)]
+    if selected_region != "HEPSİ": df_saha = df_saha[df_saha['Temsilcilik'] == selected_region]
+    if search: df_saha = df_saha[df_saha['Ad_Soyad'].str.contains(search, case=False, na=False)]
     
     cols_saha = ['Sicil_No', 'Ad_Soyad', 'Universite', 'Dogum_Tarihi', 'Temsilcilik', 'Dogum_Yeri']
     df_saha['Tanıyorum'] = False
     
-    # Tablo
-    st.info(f"📋 {selected_region} bölgesinde **{len(df_saha)}** kişi listeleniyor.")
+    # --- SAYFALAMA (PAGINATION) SİSTEMİ ---
+    if 'saha_page' not in st.session_state: st.session_state.saha_page = 1
     
+    page_size = 20 # Her sayfada kaç kişi?
+    total_records = len(df_saha)
+    total_pages = math.ceil(total_records / page_size) if total_records > 0 else 1
+    
+    # Eğer filtre değişirse sayfayı 1'e çek
+    if 'last_search' not in st.session_state: st.session_state.last_search = ""
+    if 'last_region' not in st.session_state: st.session_state.last_region = "HEPSİ"
+    
+    if search != st.session_state.last_search or selected_region != st.session_state.last_region:
+        st.session_state.saha_page = 1
+        st.session_state.last_search = search
+        st.session_state.last_region = selected_region
+
+    st.info(f"📋 Toplam **{total_records}** kişi bulundu. (Sayfa {st.session_state.saha_page}/{total_pages})")
+
+    # Sayfalama Butonları (Üst)
+    c_p1, c_p2, c_p3 = st.columns([1, 2, 1])
+    if c_p1.button("⬅️ Önceki Sayfa", disabled=(st.session_state.saha_page <= 1), key="prev_top"):
+        st.session_state.saha_page -= 1
+        st.rerun()
+    
+    with c_p2:
+        # Sayfa Seçim Kutusu
+        sel_page = st.number_input("Sayfa Git:", min_value=1, max_value=total_pages, value=st.session_state.saha_page, key="page_input")
+        if sel_page != st.session_state.saha_page:
+            st.session_state.saha_page = sel_page
+            st.rerun()
+
+    if c_p3.button("Sonraki Sayfa ➡️", disabled=(st.session_state.saha_page >= total_pages), key="next_top"):
+        st.session_state.saha_page += 1
+        st.rerun()
+
+    # Sayfaya Göre Veriyi Kes
+    start_idx = (st.session_state.saha_page - 1) * page_size
+    end_idx = start_idx + page_size
+    df_page = df_saha.iloc[start_idx:end_idx].copy()
+
+    # EDİTÖR
     edited = st.data_editor(
-        df_saha[['Tanıyorum'] + cols_saha].head(200),
+        df_page[['Tanıyorum'] + cols_saha],
         column_config={"Tanıyorum": st.column_config.CheckboxColumn("Tanıyorum", default=False)},
-        disabled=cols_saha, hide_index=True, use_container_width=True, height=600
+        disabled=cols_saha, hide_index=True, use_container_width=True, height=750
     )
     
-    if st.button("✅ SEÇİLENLERİ LİSTEME EKLE", type="primary"):
+    # KAYDET BUTONU
+    if st.button("✅ BU SAYFADAKİ SEÇİMLERİ KAYDET", type="primary"):
         sel_rows = edited[edited['Tanıyorum']==True]
         if not sel_rows.empty:
             prog = st.progress(0); cnt = 0
@@ -235,8 +260,17 @@ if user['Rol'] != 'ADMIN':
                         new_val = f"{curr_val}, {my_name}" if curr_val else my_name
                         ws.update_cell(excel_row, df.columns.get_loc('Taniyanlar')+1, new_val)
                 cnt += 1; prog.progress(cnt/len(sel_rows))
-            st.success(f"🎉 {len(sel_rows)} kişi eklendi!"); time.sleep(2); st.rerun()
-        else: st.warning("Seçim yapmadınız.")
+            st.success(f"🎉 {len(sel_rows)} kişi eklendi!"); time.sleep(1); st.rerun()
+        else: st.warning("Bu sayfada kimseyi seçmediniz.")
+
+    # Sayfalama Butonları (Alt)
+    c_b1, c_b2 = st.columns([1, 1])
+    if c_b1.button("⬅️ Önceki", disabled=(st.session_state.saha_page <= 1), key="prev_bot"):
+        st.session_state.saha_page -= 1
+        st.rerun()
+    if c_b2.button("Sonraki ➡️", disabled=(st.session_state.saha_page >= total_pages), key="next_bot"):
+        st.session_state.saha_page += 1
+        st.rerun()
 
 # =========================================================
 # 👔 ADMIN EKRANI
