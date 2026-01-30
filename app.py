@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
 import math
-import itertools
+import networkx as nx # YENİ KÜTÜPHANE (Kümeleme için şart)
 
 # --- 1. SAYFA AYARLARI ---
 st.set_page_config(
@@ -42,10 +42,9 @@ def get_data():
         else:
             return pd.DataFrame(), None, pd.DataFrame(), None
 
-        # Sütun Eşleştirme
         rename_map = {
             'Üniversite': 'Universite',
-            'Doğum_Tarihi': 'Dogum_Tarihi',
+            'Doğum_Tarihi': 'Dogum_Yili',
             'Eğilim': 'Egilim',
             'Ulaşım': 'Ulasim',
             'Temsilcilik': 'Temsilcilik',
@@ -53,7 +52,7 @@ def get_data():
         }
         df.rename(columns=rename_map, inplace=True)
 
-        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon', 'Universite', 'Dogum_Tarihi', 'Temsilcilik', 'Taniyanlar']
+        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon', 'Universite', 'Dogum_Yili', 'Temsilcilik', 'Taniyanlar']
         for col in required_cols:
             if col not in df.columns: df[col] = ""
 
@@ -66,7 +65,6 @@ def get_data():
 
         df['Universite'] = df['Universite'].str.upper().str.strip()
 
-        # Yaş Hesaplama
         current_year = datetime.now().year
         def calculate_age_robust(date_str):
             date_str = str(date_str).strip()
@@ -82,7 +80,7 @@ def get_data():
                     return current_year - int(date_str)
                 return 0
             except: return 0
-        df['Yas'] = df['Dogum_Tarihi'].apply(calculate_age_robust)
+        df['Yas'] = df['Dogum_Yili'].apply(calculate_age_robust)
 
         def group_age(age):
             if age == 0: return "Belirsiz"
@@ -98,7 +96,6 @@ def get_data():
             return "65+"
         df['Yas_Grubu'] = df['Yas'].apply(group_age)
 
-        # Sicil
         def clean_sicil(x):
             try: return int(str(x).replace(".", "").replace(" ", ""))
             except: return 999999 
@@ -168,6 +165,7 @@ if st.session_state.user is None:
 @st.dialog("✏️ SEÇMEN KARTI")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
+    
     yas = kisi.get('Yas', 0)
     uni = kisi.get('Universite', '')
     temsil = kisi.get('Temsilcilik', 'VAN MERKEZ')
@@ -247,87 +245,119 @@ if df.empty:
 # --- MENÜ ---
 menu_options = ["📝 Veri Girişi"]
 if user['Rol'] == 'ADMIN':
-    menu_options = ["📊 GENEL ANALİZ", "🎓 DEMOGRAFİK İSTİHBARAT", "🕸️ AĞ ANALİZİ", "📝 Veri Girişi"]
+    menu_options = ["📊 GENEL ANALİZ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"]
 
 menu = st.sidebar.radio("Menü", menu_options)
 
 # =========================================================
-# 🕸️ AĞ İSTİHBARATI (YENİ MODÜL)
+# 🕸️ AĞ İSTİHBARATI (KÜME ANALİZİ EKLENDİ)
 # =========================================================
-if menu == "🕸️ AĞ ANALİZİ" and user['Rol'] == 'ADMIN':
-    st.title("🕸️ Ağ İstihbaratı ve Kesişim Analizi")
-    st.info("Bu modül, 'Tanıyanlar' sütunundaki verileri analiz ederek kimin kimi tanıdığını ve referansların kesişim kümelerini gösterir.")
+if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
+    st.title("🕸️ Ağ İstihbaratı ve Kümeleme")
+    st.info("Kim kiminle ilişkili? Referansların ortak kümeleri ve etki alanları.")
 
-    # 1. VERİYİ HAZIRLA (EXPLODE)
-    # Tanıyanlar sütununu virgülle ayırıp tek tek satır haline getiriyoruz
     if 'Taniyanlar' in df.columns:
-        # Boş olmayanları al
         df_network = df[df['Taniyanlar'].str.len() > 1].copy()
-        
-        # Virgülle ayrılmış isimleri listeye çevir
         df_network['Ref_List'] = df_network['Taniyanlar'].astype(str).str.split(',')
-        
-        # Explode (Patlatma) işlemi: Her referans için bir satır oluştur
         df_exploded = df_network.explode('Ref_List')
-        df_exploded['Ref_List'] = df_exploded['Ref_List'].str.strip() # Boşlukları temizle
-        
-        # Sadece geçerli isimleri al (Boş olanları at)
+        df_exploded['Ref_List'] = df_exploded['Ref_List'].str.strip()
         df_exploded = df_exploded[df_exploded['Ref_List'].str.len() > 1]
 
-        # --- KPI ---
-        c1, c2, c3 = st.columns(3)
-        total_refs = df_exploded['Ref_List'].nunique()
-        total_tagged = df_exploded['Sicil_No'].nunique()
-        
-        c1.metric("Toplam Referans Sayısı", total_refs)
-        c2.metric("Referanslı Üye Sayısı", total_tagged)
-        
-        top_ref = df_exploded['Ref_List'].value_counts().idxmax() if not df_exploded.empty else "-"
-        c3.metric("En Çok Tanıyan", top_ref)
-        
-        st.divider()
+        # Ana Referans Listesi
+        all_refs = sorted(df_exploded['Ref_List'].unique())
 
-        tab1, tab2, tab3 = st.tabs(["🏆 LİDER TABLOSU", "📍 BÖLGESEL GÜÇ", "🔥 KESİŞİM MATRİSİ"])
+        tab1, tab2, tab3 = st.tabs(["🕸️ KÜME HARİTASI (NETWORK)", "🔥 KESİŞİM MATRİSİ", "🏆 LİDERLER"])
 
-        # TAB 1: LİDER TABLOSU
+        # --- TAB 1: KÜME HARİTASI (NETWORK GRAPH) ---
         with tab1:
-            st.subheader("En Çok Üye Tanıyanlar")
-            ref_counts = df_exploded['Ref_List'].value_counts().reset_index()
-            ref_counts.columns = ['Referans', 'Kişi Sayısı']
+            st.subheader("İlişki Ağı Haritası")
+            st.caption("Bu harita, referansların birbirine olan yakınlığını gösterir. Çizgi varsa, ortak tanıdıkları var demektir.")
             
-            fig_bar = px.bar(ref_counts.head(15), x='Kişi Sayısı', y='Referans', orientation='h', text_auto=True, title="Top 15 Referans")
-            fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-            st.plotly_chart(fig_bar, use_container_width=True)
-
-        # TAB 2: BÖLGESEL GÜÇ
-        with tab2:
-            st.subheader("Referansların Bölgesel Dağılımı")
-            sel_ref = st.selectbox("Bir Referans Seçin:", ["TÜMÜ"] + sorted(df_exploded['Ref_List'].unique()))
+            # Filtreleme (Çok kalabalık olmasın diye)
+            min_overlap = st.slider("En Az Ortak Tanıdık Sayısı (Bağlantı Gücü)", 1, 20, 3)
+            selected_network_refs = st.multiselect("Haritaya Dahil Edilecekler:", all_refs, default=all_refs[:15])
             
-            if sel_ref != "TÜMÜ":
-                df_ref_spec = df_exploded[df_exploded['Ref_List'] == sel_ref]
-            else:
-                df_ref_spec = df_exploded
+            if len(selected_network_refs) > 1:
+                # Graph Oluşturma
+                G = nx.Graph()
                 
-            loc_counts = df_ref_spec['Temsilcilik'].value_counts().reset_index()
-            loc_counts.columns = ['Bölge', 'Kişi Sayısı']
-            
-            fig_loc = px.pie(loc_counts, values='Kişi Sayısı', names='Bölge', title=f"{sel_ref} - Bölgesel Etki Alanı", hole=0.4)
-            st.plotly_chart(fig_loc, use_container_width=True)
+                # Düğümleri Ekle
+                for ref in selected_network_refs:
+                    count = len(df_exploded[df_exploded['Ref_List'] == ref])
+                    G.add_node(ref, size=count)
+                
+                # Kenarları (Edges) Ekle
+                import itertools
+                for r1, r2 in itertools.combinations(selected_network_refs, 2):
+                    set1 = set(df_exploded[df_exploded['Ref_List'] == r1]['Sicil_No'])
+                    set2 = set(df_exploded[df_exploded['Ref_List'] == r2]['Sicil_No'])
+                    common = len(set1.intersection(set2))
+                    if common >= min_overlap:
+                        G.add_edge(r1, r2, weight=common)
+                
+                # Pozisyonlama
+                pos = nx.spring_layout(G, seed=42)
+                
+                # Çizim (Plotly)
+                edge_x = []
+                edge_y = []
+                edge_text = []
+                for edge in G.edges(data=True):
+                    x0, y0 = pos[edge[0]]
+                    x1, y1 = pos[edge[1]]
+                    edge_x.extend([x0, x1, None])
+                    edge_y.extend([y0, y1, None])
+                    edge_text.append(f"Ortak: {edge[2]['weight']}")
 
-        # TAB 3: KESİŞİM MATRİSİ (HEATMAP)
-        with tab3:
-            st.subheader("🔥 Kim Kiminle Kesişiyor?")
-            st.caption("Bu harita, iki referansın ortak tanıdığı kişi sayılarını gösterir. Koyu renkler yüksek kesişimi ifade eder.")
-            
-            # Sadece Top 15 Referansı alalım (Yoksa harita çok büyük olur)
-            top_refs = df_exploded['Ref_List'].value_counts().head(15).index.tolist()
-            
-            # Seçim kutusu ile özelleştirme
-            selected_matrix_refs = st.multiselect("Matrise Dahil Edilecek Kişiler:", sorted(df_exploded['Ref_List'].unique()), default=top_refs)
+                edge_trace = go.Scatter(
+                    x=edge_x, y=edge_y,
+                    line=dict(width=0.5, color='#888'),
+                    hoverinfo='text',
+                    mode='lines')
+
+                node_x = []
+                node_y = []
+                node_text = []
+                node_size = []
+                for node in G.nodes():
+                    x, y = pos[node]
+                    node_x.append(x)
+                    node_y.append(y)
+                    count = G.nodes[node]['size']
+                    node_text.append(f"{node} ({count} kişi)")
+                    node_size.append(10 + (count / 2)) # Boyutlandırma
+
+                node_trace = go.Scatter(
+                    x=node_x, y=node_y,
+                    mode='markers+text',
+                    text=[node for node in G.nodes()],
+                    textposition="top center",
+                    hovertext=node_text,
+                    marker=dict(
+                        showscale=True,
+                        colorscale='YlGnBu',
+                        size=node_size,
+                        color=node_size,
+                        line_width=2))
+
+                fig_net = go.Figure(data=[edge_trace, node_trace],
+                                    layout=go.Layout(
+                                        showlegend=False,
+                                        hovermode='closest',
+                                        margin=dict(b=0,l=0,r=0,t=0),
+                                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+                                    )
+                st.plotly_chart(fig_net, use_container_width=True)
+            else:
+                st.warning("Lütfen en az 2 referans seçin.")
+
+        # --- TAB 2: KESİŞİM MATRİSİ ---
+        with tab2:
+            st.subheader("Kesişim Matrisi")
+            selected_matrix_refs = st.multiselect("Matris Kişileri:", all_refs, default=all_refs[:10])
             
             if len(selected_matrix_refs) > 1:
-                # Matris hesaplama
                 matrix_data = []
                 for r1 in selected_matrix_refs:
                     row = []
@@ -339,18 +369,15 @@ if menu == "🕸️ AĞ ANALİZİ" and user['Rol'] == 'ADMIN':
                     matrix_data.append(row)
                 
                 fig_heat = px.imshow(matrix_data,
-                                    labels=dict(x="Referans B", y="Referans A", color="Ortak Kişi"),
-                                    x=selected_matrix_refs,
-                                    y=selected_matrix_refs,
-                                    text_auto=True,
-                                    color_continuous_scale='Viridis')
-                fig_heat.update_layout(height=600)
+                                    labels=dict(x="Referans B", y="Referans A", color="Ortak"),
+                                    x=selected_matrix_refs, y=selected_matrix_refs, text_auto=True)
                 st.plotly_chart(fig_heat, use_container_width=True)
-            else:
-                st.warning("Matris oluşturmak için en az 2 kişi seçmelisiniz.")
 
-    else:
-        st.warning("Veri setinde 'Taniyanlar' sütunu bulunamadı veya boş.")
+        # --- TAB 3: LİDERLER ---
+        with tab3:
+            ref_counts = df_exploded['Ref_List'].value_counts().reset_index()
+            ref_counts.columns = ['Referans', 'Kişi Sayısı']
+            st.plotly_chart(px.bar(ref_counts.head(20), x='Kişi Sayısı', y='Referans', orientation='h'), use_container_width=True)
 
 # =========================================================
 # 🎓 DEMOGRAFİK İSTİHBARAT
@@ -372,7 +399,6 @@ elif menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
             c2.metric("Yaş Ort.", int(valid_ages.mean()) if not valid_ages.empty else "-")
             c3.metric("Bölge", df_uni['Temsilcilik'].mode()[0] if not df_uni.empty else "-")
             
-            # Grafikler
             c_g1, c_g2 = st.columns(2)
             with c_g1:
                 df_pie = df_uni[df_uni['Yas'] > 18]
@@ -432,7 +458,6 @@ elif menu == "📝 Veri Girişi":
     def update_search(): st.session_state.search_term = st.session_state.widget_search
     search = st.text_input("🔍 Ara", value=st.session_state.search_term, key="widget_search", on_change=update_search)
     
-    # Referans Filtresi
     ref_list = sorted([str(x) for x in df['Taniyanlar'].unique() if len(str(x)) > 1]) if 'Taniyanlar' in df.columns else []
     sel_ref = st.selectbox("Referans Filtre:", ["HEPSİ"] + ref_list)
     
