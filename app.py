@@ -52,7 +52,7 @@ def get_data():
         }
         df.rename(columns=rename_map, inplace=True)
 
-        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon', 'Universite', 'Dogum_Yili', 'Temsilcilik', 'Taniyanlar']
+        required_cols = ['Referans', 'Sandik_No', 'Egilim', 'Kurum', 'Ad_Soyad', 'Sicil_No', 'Temas_Durumu', 'Ulasim', 'Cizikler', 'Rakip_Ekleme', 'Gecmis_2024', 'Gecmis_2022', 'Telefon', 'Universite', 'Dogum_Tarihi', 'Temsilcilik', 'Taniyanlar']
         for col in required_cols:
             if col not in df.columns: df[col] = ""
 
@@ -64,7 +64,7 @@ def get_data():
         df['Temsilcilik'] = df['Temsilcilik'].apply(fix_location)
         df['Universite'] = df['Universite'].str.upper().str.strip()
 
-        # Yaş
+        # Yaş Hesaplama
         current_year = datetime.now().year
         def calculate_age_robust(date_str):
             date_str = str(date_str).strip()
@@ -93,7 +93,6 @@ def get_data():
             return "65+"
         df['Yas_Grubu'] = df['Yas'].apply(group_age)
 
-        # Sicil
         def clean_sicil(x):
             try: return int(str(x).replace(".", "").replace(" ", ""))
             except: return 999999 
@@ -161,6 +160,7 @@ if st.session_state.user is None:
 @st.dialog("✏️ SEÇMEN KARTI")
 def entry_form_dialog(kisi, row_n, sicil, user, df_cols, ws, ws_log, df_log):
     st.markdown(f"### 👤 {kisi['Ad_Soyad']}")
+    
     yas = kisi.get('Yas', 0)
     uni = kisi.get('Universite', '')
     temsil = kisi.get('Temsilcilik', 'VAN MERKEZ')
@@ -237,18 +237,18 @@ if df.empty:
 menu = st.sidebar.radio("Menü", ["📊 GENEL ANALİZ", "🕸️ AĞ İSTİHBARATI", "🎓 DEMOGRAFİK İSTİHBARAT", "📝 Veri Girişi"] if user['Rol']=='ADMIN' else ["📝 Veri Girişi"])
 
 # =========================================================
-# 🕸️ AĞ İSTİHBARATI (V28 - GEPHI STİLİ RENKLİ KÜMELER)
+# 🕸️ AĞ İSTİHBARATI (V29 - KÜÇÜK NOKTALAR)
 # =========================================================
 if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
-    st.title("🕸️ Büyük Ağ Haritası (Gephi Stili)")
-    st.info("Büyük noktalar REFERANSLARDIR. Küçük noktalar ÜYELERDİR ve renkleri BÖLGELERİNİ (Temsilcilik) gösterir.")
+    st.title("🕸️ Ağ İstihbaratı ve Kümeler")
+    st.caption("Eğer hata alıyorsanız, lütfen 'requirements.txt' dosyasına 'scipy' ekleyin!")
 
     try:
         import networkx as nx
         HAS_NETWORKX = True
     except ImportError:
         HAS_NETWORKX = False
-        st.error("⚠️ 'networkx' kütüphanesi eksik! requirements.txt'ye ekleyin.")
+        st.error("⚠️ HATA: 'scipy' ve 'networkx' kütüphaneleri eksik. Lütfen requirements.txt dosyasına ekleyin.")
 
     if HAS_NETWORKX and 'Taniyanlar' in df.columns:
         # Veri Hazırlığı
@@ -258,56 +258,42 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
         df_exploded['Ref_List'] = df_exploded['Ref_List'].str.strip()
         df_exploded = df_exploded[df_exploded['Ref_List'].str.len() > 1]
         
-        # Sicil -> Bilgi Sözlükleri
-        sicil_to_name = dict(zip(df['Sicil_No'].astype(str), df['Ad_Soyad']))
-        sicil_to_temsil = dict(zip(df['Sicil_No'].astype(str), df['Temsilcilik']))
-
-        # Referansları Güçlerine Göre Sırala
+        # Referans Güçleri
         ref_counts = df_exploded['Ref_List'].value_counts()
-        top_refs_all = ref_counts.index.tolist()
+        all_refs = ref_counts.index.tolist()
 
-        tab1, tab2 = st.tabs(["🕸️ BÜYÜK AĞ HARİTASI", "🏆 REFERANS GÜCÜ"])
-
-        with tab1:
-            # Ölçeklendirme Sürgüsü
-            n_top_refs = st.slider("Haritada Gösterilecek En Güçlü Referans Sayısı (Dikkat: Yüksek sayılar yavaşlatır!)", 5, 50, 15)
+        # --- AĞ HARİTASI ---
+        st.subheader("Kesişim Kümesi (Venn Modeli)")
+        n_refs = st.slider("Gösterilecek En Güçlü Referans Sayısı", 3, 30, 5)
+        
+        with st.spinner("Ağ haritası oluşturuluyor..."):
+            selected_refs = all_refs[:n_refs]
             
-            with st.spinner(f"Top {n_top_refs} referans için büyük ağ haritası oluşturuluyor..."):
-                selected_refs = top_refs_all[:n_top_refs]
+            G = nx.Graph()
+            
+            # Referansları Ekle (Büyük)
+            for ref in selected_refs:
+                G.add_node(ref, type='referrer', size=40, color='#D32F2F', label=ref)
                 
-                G = nx.Graph()
+            # Üyeleri Ekle
+            filtered = df_exploded[df_exploded['Ref_List'].isin(selected_refs)]
+            
+            for idx, row in filtered.iterrows():
+                sicil = str(row['Sicil_No'])
+                ref = row['Ref_List']
+                name = row['Ad_Soyad']
                 
-                # 1. Referansları Ekle (Büyük Noktalar)
-                for ref in selected_refs:
-                    G.add_node(ref, type='referrer', size=35, color='rgba(255, 0, 0, 0.9)', label=ref)
-                    
-                # 2. Üyeleri ve Bağlantıları Ekle
-                filtered_exploded = df_exploded[df_exploded['Ref_List'].isin(selected_refs)]
+                # Küçük Nokta (Üye)
+                if not G.has_node(sicil):
+                    G.add_node(sicil, type='member', size=4, color='#1976D2', label=name)
                 
-                # Temsilciliklere göre renk paleti (Gephi stili renkli kümeler için)
-                unique_temsil = df['Temsilcilik'].unique()
-                colors = px.colors.qualitative.Dark24 # Geniş bir renk paleti
-                temsil_color_map = {temsil: colors[i % len(colors)] for i, temsil in enumerate(unique_temsil)}
+                G.add_edge(ref, sicil)
+            
+            # Layout (Yaylanma Algoritması - Kesişimleri merkeze çeker)
+            try:
+                # scipy gerekli olduğu için try-except içine aldık
+                pos = nx.spring_layout(G, k=0.5, iterations=50, seed=42)
                 
-                for index, row in filtered_exploded.iterrows():
-                    sicil = str(row['Sicil_No'])
-                    ref = row['Ref_List']
-                    member_name = sicil_to_name.get(sicil, f"Sicil: {sicil}")
-                    temsil = sicil_to_temsil.get(sicil, "Bilinmiyor")
-                    mem_color = temsil_color_map.get(temsil, 'grey')
-
-                    # Üye düğümü (Küçük nokta, rengi bölgesine göre)
-                    if not G.has_node(sicil):
-                        G.add_node(sicil, type='member', size=7, color=mem_color, label=f"{member_name} ({temsil})")
-                    
-                    # Bağlantı
-                    G.add_edge(ref, sicil)
-
-                # Layout (Fizik Motoru - Yaylanma ve İterasyon artırıldı)
-                pos = nx.spring_layout(G, k=0.8/math.sqrt(len(G.nodes())), iterations=100, seed=42)
-
-                # --- ÇİZİM ---
-                # Kenarlar (İnce, gri, yarı saydam)
                 edge_x, edge_y = [], []
                 for edge in G.edges():
                     x0, y0 = pos[edge[0]]
@@ -317,41 +303,32 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
 
                 edge_trace = go.Scatter(
                     x=edge_x, y=edge_y,
-                    line=dict(width=0.3, color='rgba(150,150,150,0.4)'),
-                    hoverinfo='none',
-                    mode='lines')
+                    line=dict(width=0.2, color='#ddd'),
+                    hoverinfo='none', mode='lines')
 
-                # Referans Noktaları
                 ref_x, ref_y, ref_text = [], [], []
+                mem_x, mem_y, mem_text = [], [], []
+
                 for node in G.nodes():
+                    x, y = pos[node]
                     if G.nodes[node]['type'] == 'referrer':
-                        x, y = pos[node]
                         ref_x.append(x)
                         ref_y.append(y)
                         ref_text.append(G.nodes[node]['label'])
-                
-                ref_trace = go.Scatter(
-                    x=ref_x, y=ref_y,
-                    mode='markers+text',
-                    text=ref_text, textposition="top center",
-                    hoverinfo='none',
-                    marker=dict(size=30, color='rgba(200, 0, 0, 0.9)', line=dict(width=2, color='white')))
-
-                # Üye Noktaları (Renkli Kümeler)
-                mem_x, mem_y, mem_hover, mem_colors = [], [], [], []
-                for node in G.nodes():
-                    if G.nodes[node]['type'] == 'member':
-                        x, y = pos[node]
+                    else:
                         mem_x.append(x)
                         mem_y.append(y)
-                        mem_hover.append(G.nodes[node]['label'])
-                        mem_colors.append(G.nodes[node]['color'])
-                
+                        mem_text.append(G.nodes[node]['label'])
+
+                ref_trace = go.Scatter(
+                    x=ref_x, y=ref_y, mode='markers+text',
+                    text=ref_text, textposition="top center",
+                    marker=dict(size=25, color='red', line=dict(width=2, color='white')))
+
                 mem_trace = go.Scatter(
-                    x=mem_x, y=mem_y,
-                    mode='markers',
-                    hovertext=mem_hover, hoverinfo='text',
-                    marker=dict(size=7, color=mem_colors, opacity=0.8, line=dict(width=0.5, color='white')))
+                    x=mem_x, y=mem_y, mode='markers',
+                    hovertext=mem_text, hoverinfo='text',
+                    marker=dict(size=5, color='blue', opacity=0.6))
 
                 fig = go.Figure(data=[edge_trace, mem_trace, ref_trace],
                                 layout=go.Layout(
@@ -359,21 +336,12 @@ if menu == "🕸️ AĞ İSTİHBARATI" and user['Rol'] == 'ADMIN':
                                     margin=dict(b=0,l=0,r=0,t=0),
                                     xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                                     yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                    height=700,
-                                    plot_bgcolor='rgba(240,240,240,0.3)' # Hafif gri arka plan
+                                    height=650
                                 ))
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Renk Lejantı
-                st.caption("Küme Renkleri (Temsilcilik):")
-                cols = st.columns(len(unique_temsil))
-                for i, temsil in enumerate(unique_temsil):
-                    cols[i].markdown(f"<span style='color:{temsil_color_map[temsil]}'>●</span> {temsil}", unsafe_allow_html=True)
-
-        with tab2:
-            ref_counts = df_exploded['Ref_List'].value_counts().reset_index()
-            ref_counts.columns = ['Referans', 'Tanıdığı Kişi Sayısı']
-            st.plotly_chart(px.bar(ref_counts.head(30), x='Tanıdığı Kişi Sayısı', y='Referans', orientation='h', height=600), use_container_width=True)
+            except Exception as e:
+                st.error(f"Harita oluşturulamadı. Lütfen 'scipy' kütüphanesini yüklediğinizden emin olun. Hata: {e}")
 
 # =========================================================
 # 🎓 DEMOGRAFİK İSTİHBARAT
@@ -436,7 +404,7 @@ elif menu == "🎓 DEMOGRAFİK İSTİHBARAT" and user['Rol'] == 'ADMIN':
 # GENEL ANALİZ
 # =========================================================
 elif menu == "📊 GENEL ANALİZ" and user['Rol'] == 'ADMIN':
-    st.title("📊 Seçim Komuta Masası")
+    st.title("📊 Genel Durum")
     temas = df[df['Egilim'].str.len() > 1]
     bizim = temas[temas['Egilim'].isin(["Tüm Listemizi Yazar", "Büyük Kısmı Yazar"])]
     c1, c2, c3 = st.columns(3)
