@@ -9,7 +9,7 @@ import time
 import math
 import itertools
 from fpdf import FPDF
-import networkx as nx # Ağ analizi için şart
+import networkx as nx
 
 # =============================================================================
 # 1. AYARLAR & BAĞLANTI
@@ -30,7 +30,7 @@ def get_connection():
     return client
 
 # =============================================================================
-# 2. VERİ MOTORU (AKILLI HAFIZA - CACHE SİSTEMİ)
+# 2. VERİ MOTORU (AKILLI HAFIZA - 10 DK)
 # =============================================================================
 @st.cache_data(ttl=600) 
 def fetch_data_from_google():
@@ -219,7 +219,7 @@ if user['Rol'] != 'ADMIN':
 # 👔 ADMIN EKRANI
 # =========================================================
 else:
-    menu = st.sidebar.radio("Menü", ["📊 STRATEJİK ANALİZ", "🤝 REFERANS & PDF", "📉 KÖR NOKTA", "🕸️ AĞ HARİTASI (V48)", "🎓 DEMOGRAFİK", "📝 YÖNETİCİ GİRİŞİ"])
+    menu = st.sidebar.radio("Menü", ["📊 STRATEJİK ANALİZ", "🤝 REFERANS & PDF", "📉 KÖR NOKTA", "🕸️ AĞ HARİTASI (V48)", "🎓 DEMOGRAFİK & HEDEFLEME", "📝 YÖNETİCİ GİRİŞİ"])
 
     if menu == "📊 STRATEJİK ANALİZ":
         st.title("📊 Stratejik Komuta"); c1,c2,c3,c4=st.columns(4)
@@ -265,132 +265,54 @@ else:
         with t2: st.plotly_chart(px.bar(du['Universite'].value_counts().head(15).reset_index(), x='count', y='Universite'), use_container_width=True)
 
     elif menu == "🕸️ AĞ HARİTASI (V48)":
-        st.title("🕸️ Derin Ağ İstihbaratı")
+        st.title("🕸️ Ağ Haritası")
         try:
-            # 1. Filtreler (Çorba olmasın diye)
-            c_net1, c_net2 = st.columns([3, 1])
-            sel_refs = c_net1.multiselect("Analiz Edilecek Kişiler (Boşsa En Güçlüler Gelir):", unique_refs)
-            layout_type = c_net2.radio("Görünüm:", ["Genişletilmiş (Force)", "Dairesel (Shell)"], horizontal=True)
-            
-            # 2. Veri Hazırlığı
-            df_net = df[df['Taniyanlar'].str.len() > 1].copy()
-            df_net['Ref_List'] = df_net['Taniyanlar'].str.split(',')
-            df_exp = df_net.explode('Ref_List')
-            df_exp['Ref_List'] = df_exp['Ref_List'].str.strip()
-            df_exp = df_exp[df_exp['Ref_List'].str.len() > 1]
-            
-            # Filtreye göre veriyi süz
-            if sel_refs:
-                # Sadece seçilenlerin ağı
-                df_exp = df_exp[df_exp['Ref_List'].isin(sel_refs)]
-                top_refs = sel_refs
-            else:
-                # En çok bağlantısı olan ilk 10 kişiyi al (Varsayılan)
-                top_refs = df_exp['Ref_List'].value_counts().head(10).index.tolist()
-                df_exp = df_exp[df_exp['Ref_List'].isin(top_refs)]
-
-            # 3. Graf Oluşturma
-            G = nx.Graph()
-            
-            # Renkler için Temsilcilik Haritası
-            sicil_loc = dict(zip(df['Sicil_No'].astype(str), df['Temsilcilik']))
-            sicil_name = dict(zip(df['Sicil_No'].astype(str), df['Ad_Soyad']))
-            
-            # Referansları Ekle (Kırmızı Hublar)
-            for r in top_refs:
-                G.add_node(r, type='ref', size=40, color='red', label=r)
-            
-            # Üyeleri Ekle
-            for _, row in df_exp.iterrows():
-                sicil = str(row['Sicil_No'])
-                ref = row['Ref_List']
-                
-                # Eğer üye düğümü yoksa ekle (Renk: Temsilcilik bazlı)
-                if not G.has_node(sicil):
-                    loc = sicil_loc.get(sicil, "Bilinmiyor")
-                    # Basit renk ataması (Hash tabanlı)
-                    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
-                    color = colors[hash(loc) % len(colors)]
-                    
-                    G.add_node(sicil, type='mem', size=8, color=color, label=f"{sicil_name.get(sicil,'')} ({loc})")
-                
-                # Bağlantı ekle
-                G.add_edge(ref, sicil)
-
-            # 4. Layout (Fizik Motoru - Yayılma)
-            with st.spinner("Ağ haritası fizik motoru çalışıyor..."):
-                if layout_type == "Genişletilmiş (Force)":
-                    # k değeri düğümlerin birbirini ne kadar iteceğini belirler. Artırdık.
-                    pos = nx.spring_layout(G, k=1.5/math.sqrt(len(G.nodes())), iterations=100, seed=42)
-                else:
-                    pos = nx.shell_layout(G)
-
-            # 5. Çizim (Plotly)
-            edge_x, edge_y = [], []
-            for edge in G.edges():
-                x0, y0 = pos[edge[0]]
-                x1, y1 = pos[edge[1]]
-                edge_x.extend([x0, x1, None])
-                edge_y.extend([y0, y1, None])
-
-            # Kenarlar (Silik çizgiler)
-            edge_trace = go.Scatter(
-                x=edge_x, y=edge_y,
-                line=dict(width=0.5, color='rgba(200,200,200,0.5)'),
-                hoverinfo='none',
-                mode='lines')
-
-            # Referans Noktaları (Büyük Kırmızı)
-            rx, ry, rt = [], [], []
-            for node in G.nodes():
-                if G.nodes[node]['type'] == 'ref':
-                    rx.append(pos[node][0])
-                    ry.append(pos[node][1])
-                    rt.append(G.nodes[node]['label'])
-            
-            ref_trace = go.Scatter(
-                x=rx, y=ry,
-                mode='markers+text',
-                text=rt, textposition="top center", textfont=dict(size=12, color='black', family='Arial Black'),
-                marker=dict(size=30, color='red', line=dict(width=2, color='white'), opacity=0.9),
-                hoverinfo='text')
-
-            # Üye Noktaları (Renkli Küçük)
-            mx, my, mt, mc = [], [], [], []
-            for node in G.nodes():
-                if G.nodes[node]['type'] == 'mem':
-                    mx.append(pos[node][0])
-                    my.append(pos[node][1])
-                    mt.append(G.nodes[node]['label'])
-                    mc.append(G.nodes[node]['color'])
-            
-            mem_trace = go.Scatter(
-                x=mx, y=my,
-                mode='markers',
-                hovertext=mt, hoverinfo='text',
-                marker=dict(size=8, color=mc, line=dict(width=0.5, color='white'), opacity=0.8))
-
-            fig = go.Figure(data=[edge_trace, mem_trace, ref_trace],
-                            layout=go.Layout(
-                                showlegend=False,
-                                hovermode='closest',
-                                margin=dict(b=20,l=5,r=5,t=40),
-                                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                height=750,
-                                title_text=f"Ağ Bağlantı Haritası ({len(G.nodes())} Düğüm)",
-                                plot_bgcolor='white'
-                            ))
-            
+            import networkx as nx; n_ref = st.slider("Ref Sayısı", 3, 30, 5)
+            df_exp = df.assign(R=df['Taniyanlar'].str.split(',')).explode('R'); df_exp['R'] = df_exp['R'].str.strip(); df_exp = df_exp[df_exp['R'].str.len()>1]
+            top_refs = df_exp['R'].value_counts().head(n_ref).index.tolist(); G = nx.Graph()
+            for r in top_refs: G.add_node(r, type='ref', size=30, color='red')
+            filt = df_exp[df_exp['R'].isin(top_refs)]
+            for _,row in filt.iterrows():
+                if not G.has_node(str(row['Sicil_No'])): G.add_node(str(row['Sicil_No']), type='mem', size=5, color='blue')
+                G.add_edge(row['R'], str(row['Sicil_No']))
+            pos = nx.spring_layout(G, k=0.5, seed=42); edge_x=[]; edge_y=[]
+            for e in G.edges(): x0,y0=pos[e[0]]; x1,y1=pos[e[1]]; edge_x.extend([x0,x1,None]); edge_y.extend([y0,y1,None])
+            fig = go.Figure(data=[go.Scatter(x=edge_x, y=edge_y, mode='lines', line=dict(width=0.3, color='#ccc')), go.Scatter(x=[pos[n][0] for n in G.nodes() if G.nodes[n]['type']=='ref'], y=[pos[n][1] for n in G.nodes() if G.nodes[n]['type']=='ref'], mode='markers+text', text=[n for n in G.nodes() if G.nodes[n]['type']=='ref'], marker=dict(size=20, color='red'))])
             st.plotly_chart(fig, use_container_width=True)
-            st.info("💡 İPUCU: Haritadaki noktalar 'Temsilcilik' rengine göre boyanmıştır. Ortada birikenler 'Ortak Tanıdıklar'dır.")
+        except: st.error("Kütüphane eksik")
 
-        except Exception as e:
-            st.error(f"Harita hatası: {e}. Lütfen requirements.txt dosyasına networkx ve scipy ekleyin.")
-
-    elif menu == "🎓 DEMOGRAFİK":
-        st.plotly_chart(px.pie(df, names='Yas_Grubu', title="Yaş Dağılımı"), use_container_width=True)
-        st.plotly_chart(px.bar(df['Universite'].value_counts().head(10), title="Üniversiteler"), use_container_width=True)
+    elif menu == "🎓 DEMOGRAFİK & HEDEFLEME":
+        st.title("🎓 Akademik Hedefleme & Boşluk Analizi")
+        t1, t2 = st.tabs(["📊 GENEL", "🎯 OKUL DETAY & BOŞLUK"])
+        
+        with t1:
+            c1,c2 = st.columns(2)
+            c1.plotly_chart(px.pie(df, names='Yas_Grubu', title="Yaş Dağılımı"), use_container_width=True)
+            c2.plotly_chart(px.bar(df['Universite'].value_counts().head(10), title="En Çok Mezun Veren Top 10 Okul"), use_container_width=True)
+            
+        with t2:
+            st.subheader("🎯 Üniversite Bazlı Hedefleme")
+            uni_list = sorted([u for u in df['Universite'].unique() if len(str(u))>2])
+            selected_uni = st.selectbox("🏫 Üniversite Seç:", uni_list)
+            
+            show_only_empty = st.checkbox("🔴 Sadece Kimsenin Tanımadığı (Kör Nokta) Üyeleri Göster")
+            
+            if selected_uni:
+                df_uni = df[df['Universite'] == selected_uni]
+                
+                if show_only_empty:
+                    df_uni = df_uni[df_uni['Taninma_Durumu'].str.contains("Kör")]
+                    st.warning(f"⚠️ **{selected_uni}** mezunu olup REFERANSI OLMAYAN **{len(df_uni)}** kişi var. (Yüklenilmesi gereken liste!)")
+                else:
+                    st.info(f"ℹ️ **{selected_uni}** mezunu toplam **{len(df_uni)}** kişi var.")
+                
+                # İstenilen sütunlar: Ad, Yas, Dogum, TANIYANLAR (Yeni)
+                cols_show = ['Sicil_No', 'Ad_Soyad', 'Taniyanlar', 'Yas', 'Dogum_Tarihi', 'Telefon', 'Temsilcilik']
+                event = st.dataframe(df_uni[cols_show], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", height=600)
+                
+                if len(event.selection.rows)>0:
+                    idx = event.selection.rows[0]; sicil = df_uni.iloc[idx]['Sicil_No']; g_idx = df[df['Sicil_No']==sicil].index[0]
+                    admin_card(df.iloc[g_idx], g_idx+2, sicil, user, df.columns.tolist(), ws, ws_log, unique_refs)
 
     elif menu == "📝 YÖNETİCİ GİRİŞİ":
         st.header("📋 Detaylı Arama")
