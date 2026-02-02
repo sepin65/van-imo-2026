@@ -30,7 +30,7 @@ def get_connection():
     return client
 
 # =============================================================================
-# 2. VERİ MOTORU (AKILLI HAFIZA - 10 DK)
+# 2. VERİ MOTORU (AKILLI HAFIZA)
 # =============================================================================
 @st.cache_data(ttl=600) 
 def fetch_data_from_google():
@@ -115,7 +115,7 @@ def get_data():
 
     return df, ws, df_log, ws_log, unique_refs
 
-# --- PDF MOTORU ---
+# --- PDF MOTORU 1 (GÖREV LİSTESİ) ---
 def create_pdf(df_s, ref_name):
     def clean(t):
         t = str(t).replace('ğ','g').replace('Ğ','G').replace('ş','s').replace('Ş','S').replace('ı','i').replace('İ','I').replace('ü','u').replace('Ü','U').replace('ö','o').replace('Ö','O').replace('ç','c').replace('Ç','C')
@@ -126,6 +126,29 @@ def create_pdf(df_s, ref_name):
     pdf.set_font("Arial", size=8)
     for i, r in df_s.iterrows():
         pdf.cell(15,7,clean(r['Sicil_No']),1); pdf.cell(60,7,clean(r['Ad_Soyad'])[:30],1); pdf.cell(30,7,clean(r['Telefon']),1); pdf.cell(35,7,clean(r['Calisma_Durumu']),1); pdf.cell(40,7,clean(r['Kurum'])[:25],1); pdf.ln()
+    return pdf.output(dest='S').encode('latin-1','replace')
+
+# --- PDF MOTORU 2 (ÜNİVERSİTE LİSTESİ - YENİ) ---
+def create_uni_pdf(df_s, uni_name):
+    def clean(t):
+        t = str(t).replace('ğ','g').replace('Ğ','G').replace('ş','s').replace('Ş','S').replace('ı','i').replace('İ','I').replace('ü','u').replace('Ü','U').replace('ö','o').replace('Ö','O').replace('ç','c').replace('Ç','C')
+        return t.replace("⏳","(-)").replace("👍","(+)").replace("✅","(OK)").replace("❌","(NO)").encode('latin-1','ignore').decode('latin-1')
+    
+    pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=10)
+    # Başlık
+    pdf.set_font("Arial", 'B', 12); pdf.cell(0, 10, clean(f"MEZUN LISTESI: {uni_name}"), ln=True, align='C'); pdf.ln(5)
+    # Tablo Başlıkları (Sicil, Ad, Tanıyanlar, Tel, Bölge)
+    pdf.set_font("Arial", 'B', 7)
+    pdf.cell(15,8,"Sicil",1); pdf.cell(50,8,"Ad Soyad",1); pdf.cell(50,8,"Taniyanlar",1); pdf.cell(30,8,"Telefon",1); pdf.cell(35,8,"Bolge",1); pdf.ln()
+    
+    pdf.set_font("Arial", size=7)
+    for i, r in df_s.iterrows():
+        pdf.cell(15,7,clean(r['Sicil_No']),1)
+        pdf.cell(50,7,clean(r['Ad_Soyad'])[:25],1)
+        pdf.cell(50,7,clean(r['Taniyanlar'])[:25],1) # Referanslar önemli
+        pdf.cell(30,7,clean(r['Telefon']),1)
+        pdf.cell(35,7,clean(r['Temsilcilik'])[:20],1)
+        pdf.ln()
     return pdf.output(dest='S').encode('latin-1','replace')
 
 # --- GİRİŞ ---
@@ -250,7 +273,7 @@ else:
             tr = st.selectbox("Hangi Referans?", ["Seç..."]+unique_refs)
             if tr!="Seç...":
                 df_g = df[df['Taniyanlar'].str.contains(tr, na=False)]; c1,c2=st.columns(2); c1.metric("Toplam",len(df_g)); c2.metric("Görüşülen", len(df_g[df_g['Calisma_Durumu'].str.contains("👍")]))
-                try: st.download_button("📄 PDF İNDİR", create_pdf(df_g, tr), f"{tr}.pdf", "application/pdf", type="primary")
+                try: st.download_button("📄 PDF İNDİR (GÖREV)", create_pdf(df_g, tr), f"{tr}.pdf", "application/pdf", type="primary")
                 except: st.error("PDF Hatası")
                 def clr(v): return f'background-color: {"#ffcdd2" if "Bekliyor" in str(v) else "#c8e6c9"}'
                 st.dataframe(df_g[['Sicil_No','Ad_Soyad','Calisma_Durumu']].style.map(clr, subset=['Calisma_Durumu']), use_container_width=True)
@@ -283,7 +306,7 @@ else:
 
     elif menu == "🎓 DEMOGRAFİK & HEDEFLEME":
         st.title("🎓 Akademik Hedefleme & Boşluk Analizi")
-        t1, t2 = st.tabs(["📊 GENEL", "🎯 OKUL DETAY & BOŞLUK"])
+        t1, t2 = st.tabs(["📊 GENEL", "🎯 OKUL DETAY & PDF (YENİ)"])
         
         with t1:
             c1,c2 = st.columns(2)
@@ -295,18 +318,23 @@ else:
             uni_list = sorted([u for u in df['Universite'].unique() if len(str(u))>2])
             selected_uni = st.selectbox("🏫 Üniversite Seç:", uni_list)
             
-            show_only_empty = st.checkbox("🔴 Sadece Kimsenin Tanımadığı (Kör Nokta) Üyeleri Göster")
+            show_only_empty = st.checkbox("🔴 Sadece Tanınmayanlar (Kör Nokta)")
             
             if selected_uni:
                 df_uni = df[df['Universite'] == selected_uni]
-                
                 if show_only_empty:
                     df_uni = df_uni[df_uni['Taninma_Durumu'].str.contains("Kör")]
-                    st.warning(f"⚠️ **{selected_uni}** mezunu olup REFERANSI OLMAYAN **{len(df_uni)}** kişi var. (Yüklenilmesi gereken liste!)")
+                    st.warning(f"Referansı Olmayan: {len(df_uni)} kişi")
                 else:
-                    st.info(f"ℹ️ **{selected_uni}** mezunu toplam **{len(df_uni)}** kişi var.")
+                    st.info(f"Toplam Mezun: {len(df_uni)} kişi")
                 
-                # İstenilen sütunlar: Ad, Yas, Dogum, TANIYANLAR (Yeni)
+                # PDF BUTONU (YENİ)
+                if not df_uni.empty:
+                    try:
+                        f_name = f"{selected_uni[:10]}_Listesi.pdf"
+                        st.download_button("📄 BU LİSTEYİ PDF İNDİR", create_uni_pdf(df_uni, selected_uni), f_name, "application/pdf", type="primary")
+                    except: st.error("PDF oluşturulamadı")
+
                 cols_show = ['Sicil_No', 'Ad_Soyad', 'Taniyanlar', 'Yas', 'Dogum_Tarihi', 'Telefon', 'Temsilcilik']
                 event = st.dataframe(df_uni[cols_show], use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", height=600)
                 
